@@ -1,4 +1,3 @@
-use std::path::Path;
 use tokio::fs;
 
 const PREDATOR_SENSE_DIR: &str =
