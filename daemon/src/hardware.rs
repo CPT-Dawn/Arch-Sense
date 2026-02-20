@@ -30,6 +30,19 @@ impl HardwareInterface {
         Self::read_sysfs("fan_speed").await
     }
 
+    /// Gets the current fan speed as percentages (CPU, GPU)
+    pub async fn get_fan_speed() -> Result<(u8, u8), String> {
+        let data = Self::read_sysfs("fan_speed").await?;
+        let parts: Vec<&str> = data.split(',').collect();
+        if parts.len() == 2 {
+            let cpu = parts[0].parse().unwrap_or(0);
+            let gpu = parts[1].parse().unwrap_or(0);
+            Ok((cpu, gpu))
+        } else {
+            Err("Invalid data format".to_string())
+        }
+    }
+
     pub async fn set_fan_mode(mode: shared::FanMode) -> Result<(), String> {
         let val = match mode {
             shared::FanMode::Auto => "0,0".to_string(),

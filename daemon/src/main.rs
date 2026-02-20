@@ -34,6 +34,22 @@ async fn main() {
                             serde_json::from_slice(&buffer[..bytes_read]);
 
                         let response = match request {
+                            Ok(Command::GetHardwareStatus) => {
+                                let (cpu_fan, gpu_fan) =
+                                    HardwareInterface::get_fan_speed().await.unwrap_or((0, 0));
+
+                                let fake_cpu_temp = 45;
+                                let fake_gpu_temp = 40;
+
+                                Response::HardwareStatus {
+                                    cpu_temp: fake_cpu_temp,
+                                    gpu_temp: fake_gpu_temp,
+                                    cpu_fan_percent: cpu_fan,
+                                    gpu_fan_percent: gpu_fan,
+                                    active_mode: "Unknown".to_string(),
+                                }
+                            }
+
                             Ok(Command::SetBatteryLimiter(enable)) => {
                                 match HardwareInterface::set_battery_limiter(enable).await {
                                     Ok(_) => {
