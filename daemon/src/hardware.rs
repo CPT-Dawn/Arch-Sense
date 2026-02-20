@@ -43,6 +43,19 @@ impl HardwareInterface {
         }
     }
 
+    /// Reads the actual hardware temperature from the Linux thermal zone
+    pub async fn get_cpu_temp() -> Result<u8, String> {
+        // Read the raw thermal file
+        match tokio::fs::read_to_string("/sys/class/thermal/thermal_zone0/temp").await {
+            Ok(raw) => {
+                let temp_millidegrees: f32 = raw.trim().parse().unwrap_or(0.0);
+                // Convert to Celsius
+                Ok((temp_millidegrees / 1000.0) as u8)
+            }
+            Err(e) => Err(format!("Could not read temp: {}", e)),
+        }
+    }
+
     pub async fn set_fan_mode(mode: shared::FanMode) -> Result<(), String> {
         let val = match mode {
             shared::FanMode::Auto => "0,0".to_string(),
