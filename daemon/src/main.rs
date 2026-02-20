@@ -1,6 +1,8 @@
+mod config;
 mod hardware;
 mod keyboard;
 
+use config::DaemonConfig;
 use hardware::HardwareInterface;
 use keyboard::KeyboardInterface;
 use shared::{Command, FanMode, Response};
@@ -48,28 +50,39 @@ async fn main() {
     println!("🔥 Starting Arch-Sense Background Daemon...");
     let _ = fs::remove_file(SOCKET_PATH);
 
-    // 1. Shared State: The Daemon starts in Auto (Custom Curve) mode
-    let current_mode = Arc::new(Mutex::new(FanMode::Auto));
+    // 1. 📂 LOAD PERSISTENT STATE
+    let initial_config = DaemonConfig::load();
+    let shared_config = Arc::new(Mutex::new(initial_config.clone()));
 
-    // 2. 🚀 THE BACKGROUND WORKER (Fan Curve Loop)
-    let mode_for_worker = Arc::clone(&current_mode);
+    // 2. ⚡ APPLY HARDWARE STATE ON BOOT
+    println!("⚙️ Applying saved hardware configuration...");
+    let _ = HardwareInterface::set_battery_limiter(initial_config.battery_limiter).await;
+    let _ = HardwareInterface::set_lcd_overdrive(initial_config.lcd_overdrive).await;
+    let _ = HardwareInterface::set_boot_animation(initial_config.boot_animation).await;
+    let _ = HardwareInterface::set_backlight_timeout(initial_config.backlight_timeout).await;
+    let _ = HardwareInterface::set_usb_charging(initial_config.usb_charging).await;
+
+    if let Some((r, g, b)) = initial_config.keyboard_color {
+        let _ = KeyboardInterface::set_global_color(r, g, b);
+    } else if let Some(anim) = initial_config.keyboard_animation {
+        let _ = KeyboardInterface::set_animation(&anim);
+    }
+
+    // 3. 🚀 THE BACKGROUND WORKER (Fan Curve Loop)
+    let config_for_worker = Arc::clone(&shared_config);
     tokio::spawn(async move {
         loop {
-            // Check the hardware every 2 seconds
             sleep(Duration::from_secs(2)).await;
 
             let mode = {
-                let lock = mode_for_worker.lock().await;
-                lock.clone()
+                let lock = config_for_worker.lock().await;
+                lock.fan_mode.clone()
             };
 
-            // If the user selected 'Auto', our Rust daemon takes over and applies the curve!
             if let FanMode::Auto = mode
                 && let Ok(temp) = HardwareInterface::get_cpu_temp().await
             {
                 let target_speed = calculate_fan_speed(temp, FAN_CURVE);
-
-                // Secretly apply the custom percentage to the hardware
                 let _ =
                     HardwareInterface::set_fan_mode(FanMode::Custom(target_speed, target_speed))
                         .await;
@@ -77,19 +90,16 @@ async fn main() {
         }
     });
 
-    // 3. 🎧 THE SOCKET LISTENER (UI Communications)
+    // 4. 🎧 THE SOCKET LISTENER
     let listener = UnixListener::bind(SOCKET_PATH).expect("Failed to bind socket.");
-
-    // 🔓 THE FIX: Make the root-owned socket writable by your normal user!
     fs::set_permissions(SOCKET_PATH, fs::Permissions::from_mode(0o777))
         .expect("Failed to set socket permissions");
-
     println!("🎧 Listening for UI commands on {}...", SOCKET_PATH);
 
     loop {
         match listener.accept().await {
             Ok((mut socket, _addr)) => {
-                let mode_for_socket = Arc::clone(&current_mode);
+                let config_for_socket = Arc::clone(&shared_config);
 
                 tokio::spawn(async move {
                     let mut buffer = vec![0; 1024];
@@ -100,74 +110,41 @@ async fn main() {
                         let request: Result<Command, _> =
                             serde_json::from_slice(&buffer[..bytes_read]);
 
+                        // Lock the state manager!
+                        let mut cfg = config_for_socket.lock().await;
+
                         let response = match request {
                             // UI wants live stats
                             Ok(Command::GetHardwareStatus) => {
                                 let (cpu_fan, gpu_fan) =
                                     HardwareInterface::get_fan_speed().await.unwrap_or((0, 0));
                                 let cpu_temp = HardwareInterface::get_cpu_temp().await.unwrap_or(0);
-
-                                // 🌟 NEW: Fetch the real GPU temperature!
                                 let gpu_temp = HardwareInterface::get_gpu_temp().await.unwrap_or(0);
-
-                                // Tell the UI what mode we are actively enforcing
-                                let active_mode_str = {
-                                    let lock = mode_for_socket.lock().await;
-                                    format!("{:?}", *lock)
-                                };
 
                                 Response::HardwareStatus {
                                     cpu_temp,
-                                    gpu_temp, // Pass the real value here!
+                                    gpu_temp,
                                     cpu_fan_percent: cpu_fan,
                                     gpu_fan_percent: gpu_fan,
-                                    active_mode: active_mode_str,
+                                    active_mode: format!("{:?}", cfg.fan_mode), // Read directly from config
                                 }
                             }
 
-                            // UI wants to change the keyboard color!
-                            Ok(Command::SetKeyboardColor(r, g, b)) => {
-                                match KeyboardInterface::set_global_color(r, g, b) {
-                                    Ok(_) => Response::Ack(format!(
-                                        "Keyboard color set to RGB({},{},{})",
-                                        r, g, b
-                                    )),
-                                    Err(e) => Response::Error(e),
-                                }
-                            }
+                            // 🌬️ FANS & POWER
+                            Ok(Command::SetFanMode(new_mode)) => {
+                                cfg.fan_mode = new_mode.clone();
+                                cfg.save();
 
-                            Ok(Command::SetLcdOverdrive(enable)) => {
-                                match HardwareInterface::set_lcd_overdrive(enable).await {
-                                    Ok(_) => {
-                                        Response::Ack(format!("LCD Overdrive set to {}", enable))
-                                    }
-                                    Err(e) => Response::Error(e),
+                                if !matches!(new_mode, FanMode::Auto) {
+                                    let _ = HardwareInterface::set_fan_mode(new_mode.clone()).await;
                                 }
+                                Response::Ack(format!("Mode changed to {:?}", new_mode))
                             }
-                            Ok(Command::SetBootAnimation(enable)) => {
-                                match HardwareInterface::set_boot_animation(enable).await {
-                                    Ok(_) => {
-                                        Response::Ack(format!("Boot Animation set to {}", enable))
-                                    }
-                                    Err(e) => Response::Error(e),
-                                }
-                            }
-                            Ok(Command::SetBacklightTimeout(enable)) => {
-                                match HardwareInterface::set_backlight_timeout(enable).await {
-                                    Ok(_) => {
-                                        Response::Ack(format!("Keyboard Timeout set to {}", enable))
-                                    }
-                                    Err(e) => Response::Error(e),
-                                }
-                            }
-                            Ok(Command::SetUsbCharging(threshold)) => {
-                                match HardwareInterface::set_usb_charging(threshold).await {
-                                    Ok(_) => Response::Ack(format!(
-                                        "USB Charging threshold set to {}%",
-                                        threshold
-                                    )),
-                                    Err(e) => Response::Error(e),
-                                }
+                            Ok(Command::SetBatteryLimiter(enable)) => {
+                                cfg.battery_limiter = enable;
+                                cfg.save();
+                                let _ = HardwareInterface::set_battery_limiter(enable).await;
+                                Response::Ack(format!("Battery limiter set to {}", enable))
                             }
                             Ok(Command::SetBatteryCalibration(enable)) => {
                                 match HardwareInterface::set_battery_calibration(enable).await {
@@ -179,8 +156,25 @@ async fn main() {
                                 }
                             }
 
-                            // UI wants to trigger an animation
+                            // 💡 RGB CONTROLS
+                            Ok(Command::SetKeyboardColor(r, g, b)) => {
+                                cfg.keyboard_color = Some((r, g, b));
+                                cfg.keyboard_animation = None;
+                                cfg.save();
+
+                                match KeyboardInterface::set_global_color(r, g, b) {
+                                    Ok(_) => Response::Ack(format!(
+                                        "Keyboard color set to RGB({},{},{})",
+                                        r, g, b
+                                    )),
+                                    Err(e) => Response::Error(e),
+                                }
+                            }
                             Ok(Command::SetKeyboardAnimation(effect)) => {
+                                cfg.keyboard_animation = Some(effect.clone());
+                                cfg.keyboard_color = None;
+                                cfg.save();
+
                                 match KeyboardInterface::set_animation(&effect) {
                                     Ok(_) => Response::Ack(format!(
                                         "Keyboard animation set to '{}'",
@@ -189,26 +183,54 @@ async fn main() {
                                     Err(e) => Response::Error(e),
                                 }
                             }
-                            // UI wants to change the mode
-                            Ok(Command::SetFanMode(new_mode)) => {
-                                // 1. Update our shared state so the background worker knows
-                                {
-                                    let mut lock = mode_for_socket.lock().await;
-                                    *lock = new_mode.clone();
-                                }
 
-                                // 2. If it's NOT Auto, apply it to the hardware immediately
-                                if !matches!(new_mode, FanMode::Auto) {
-                                    let _ = HardwareInterface::set_fan_mode(new_mode.clone()).await;
-                                }
+                            // ⚙️ SYSTEM TOGGLES
+                            Ok(Command::SetLcdOverdrive(enable)) => {
+                                cfg.lcd_overdrive = enable;
+                                cfg.save();
 
-                                Response::Ack(format!("Mode changed to {:?}", new_mode))
+                                match HardwareInterface::set_lcd_overdrive(enable).await {
+                                    Ok(_) => {
+                                        Response::Ack(format!("LCD Overdrive set to {}", enable))
+                                    }
+                                    Err(e) => Response::Error(e),
+                                }
+                            }
+                            Ok(Command::SetBootAnimation(enable)) => {
+                                cfg.boot_animation = enable;
+                                cfg.save();
+
+                                match HardwareInterface::set_boot_animation(enable).await {
+                                    Ok(_) => {
+                                        Response::Ack(format!("Boot Animation set to {}", enable))
+                                    }
+                                    Err(e) => Response::Error(e),
+                                }
+                            }
+                            Ok(Command::SetBacklightTimeout(enable)) => {
+                                cfg.backlight_timeout = enable;
+                                cfg.save();
+
+                                match HardwareInterface::set_backlight_timeout(enable).await {
+                                    Ok(_) => {
+                                        Response::Ack(format!("Keyboard Timeout set to {}", enable))
+                                    }
+                                    Err(e) => Response::Error(e),
+                                }
+                            }
+                            Ok(Command::SetUsbCharging(threshold)) => {
+                                cfg.usb_charging = threshold;
+                                cfg.save();
+
+                                match HardwareInterface::set_usb_charging(threshold).await {
+                                    Ok(_) => Response::Ack(format!(
+                                        "USB Charging threshold set to {}%",
+                                        threshold
+                                    )),
+                                    Err(e) => Response::Error(e),
+                                }
                             }
 
-                            Ok(Command::SetBatteryLimiter(enable)) => {
-                                let _ = HardwareInterface::set_battery_limiter(enable).await;
-                                Response::Ack(format!("Battery limiter set to {}", enable))
-                            }
                             _ => Response::Error("Unknown command".to_string()),
                         };
 

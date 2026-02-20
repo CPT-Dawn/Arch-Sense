@@ -12,7 +12,7 @@ pub struct KeyboardInterface;
 impl KeyboardInterface {
     pub fn set_global_color(r: u8, g: u8, b: u8) -> Result<(), String> {
         // 1. Find the Keyboard on the USB Bus
-        let mut handle = rusb::open_device_with_vid_pid(VID, PID)
+        let handle = rusb::open_device_with_vid_pid(VID, PID)
             .ok_or("❌ Could not find Acer USB Keyboard! Is the Daemon running as root?")?;
 
         // 2. Hijack the device from the Linux Kernel temporarily

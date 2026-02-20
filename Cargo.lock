@@ -105,6 +105,7 @@ name = "daemon"
 version = "0.1.0"
 dependencies = [
  "rusb",
+ "serde",
  "serde_json",
  "shared",
  "tokio",

@@ -9,3 +9,4 @@ shared = { path = "../shared" }
 tokio = { version = "1.0", features = ["full"] }
 tokio-util = "0.7"
 rusb = "0.9"
+serde = { version = "1.0.228", features = ["derive"] }
