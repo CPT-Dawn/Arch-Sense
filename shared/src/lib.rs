@@ -1,14 +1,43 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+use serde::{Deserialize, Serialize};
+
+// ==========================================
+// HARDWARE PROFILES
+// ==========================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FanMode {
+    Auto,
+    Quiet,
+    Balanced,
+    Performance,
+    Turbo,
+    Custom(u8, u8),
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// ==========================================
+// THE COMMANDS (Client -> Daemon)
+// ==========================================
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Command {
+    GetHardwareStatus,
+    SetFanMode(FanMode),
+    SetBatteryLimiter(bool),
+}
+
+// ==========================================
+// THE RESPONSES (Daemon -> Client)
+// ==========================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Response {
+    Ack(String),
+    Error(String),
+    HardwareStatus {
+        cpu_temp: u8,
+        gpu_temp: u8,
+        cpu_fan_percent: u8,
+        gpu_fan_percent: u8,
+        active_mode: String,
+    },
 }
