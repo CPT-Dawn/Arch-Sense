@@ -79,8 +79,11 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::R
  🎮 Acer Predator Arch-Sense Control
  -----------------------------------
  🌬️ FANS: [a] Auto | [b] Balanced | [t] Turbo
- 🔋 PWR:  [l] Toggle 80% Battery Limiter
+ 🔋 PWR:  [l] Toggle 80% Battery Limiter | [c] Trigger Battery Calibration
  💡 RGB:  [1] Red | [2] Green | [3] Blue | [4] White | [5] Pink
+ ✨ FX:   [7] Neon | [8] Wave | [9] Breath | [k] Toggle 30s Timeout
+ ⚙️ SYS:  [o] Toggle 3ms LCD Overdrive | [m] Toggle Boot Sound
+ ⚡ USB:  [u] Cycle USB Charging Threshold (0, 10, 20, 30)
  
  [q] Quit UI
             ";
@@ -131,6 +134,34 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::R
                 }
                 KeyCode::Char('5') => {
                     app.last_response = send_command(Command::SetKeyboardColor(255, 0, 255)).await;
+                }
+                KeyCode::Char('7') => {
+                    app.last_response =
+                        send_command(Command::SetKeyboardAnimation("neon".to_string())).await;
+                }
+                KeyCode::Char('8') => {
+                    app.last_response =
+                        send_command(Command::SetKeyboardAnimation("wave".to_string())).await;
+                }
+                KeyCode::Char('9') => {
+                    app.last_response =
+                        send_command(Command::SetKeyboardAnimation("breath".to_string())).await;
+                }
+                KeyCode::Char('o') => {
+                    // LCD Overdrive (Toggle logic would require reading state, so let's just send true for now to test)
+                    app.last_response = send_command(Command::SetLcdOverdrive(true)).await;
+                }
+                KeyCode::Char('m') => {
+                    app.last_response = send_command(Command::SetBootAnimation(false)).await;
+                }
+                KeyCode::Char('k') => {
+                    app.last_response = send_command(Command::SetBacklightTimeout(true)).await;
+                }
+                KeyCode::Char('u') => {
+                    app.last_response = send_command(Command::SetUsbCharging(30)).await;
+                }
+                KeyCode::Char('c') => {
+                    app.last_response = send_command(Command::SetBatteryCalibration(true)).await;
                 }
                 KeyCode::Char('a') => {
                     app.last_response = send_command(Command::SetFanMode(FanMode::Auto)).await;

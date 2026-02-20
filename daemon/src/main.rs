@@ -107,6 +107,9 @@ async fn main() {
                                     HardwareInterface::get_fan_speed().await.unwrap_or((0, 0));
                                 let cpu_temp = HardwareInterface::get_cpu_temp().await.unwrap_or(0);
 
+                                // 🌟 NEW: Fetch the real GPU temperature!
+                                let gpu_temp = HardwareInterface::get_gpu_temp().await.unwrap_or(0);
+
                                 // Tell the UI what mode we are actively enforcing
                                 let active_mode_str = {
                                     let lock = mode_for_socket.lock().await;
@@ -115,7 +118,7 @@ async fn main() {
 
                                 Response::HardwareStatus {
                                     cpu_temp,
-                                    gpu_temp: 40, // Keeping GPU temp hardcoded until we link nvidia-smi
+                                    gpu_temp, // Pass the real value here!
                                     cpu_fan_percent: cpu_fan,
                                     gpu_fan_percent: gpu_fan,
                                     active_mode: active_mode_str,
@@ -128,6 +131,60 @@ async fn main() {
                                     Ok(_) => Response::Ack(format!(
                                         "Keyboard color set to RGB({},{},{})",
                                         r, g, b
+                                    )),
+                                    Err(e) => Response::Error(e),
+                                }
+                            }
+
+                            Ok(Command::SetLcdOverdrive(enable)) => {
+                                match HardwareInterface::set_lcd_overdrive(enable).await {
+                                    Ok(_) => {
+                                        Response::Ack(format!("LCD Overdrive set to {}", enable))
+                                    }
+                                    Err(e) => Response::Error(e),
+                                }
+                            }
+                            Ok(Command::SetBootAnimation(enable)) => {
+                                match HardwareInterface::set_boot_animation(enable).await {
+                                    Ok(_) => {
+                                        Response::Ack(format!("Boot Animation set to {}", enable))
+                                    }
+                                    Err(e) => Response::Error(e),
+                                }
+                            }
+                            Ok(Command::SetBacklightTimeout(enable)) => {
+                                match HardwareInterface::set_backlight_timeout(enable).await {
+                                    Ok(_) => {
+                                        Response::Ack(format!("Keyboard Timeout set to {}", enable))
+                                    }
+                                    Err(e) => Response::Error(e),
+                                }
+                            }
+                            Ok(Command::SetUsbCharging(threshold)) => {
+                                match HardwareInterface::set_usb_charging(threshold).await {
+                                    Ok(_) => Response::Ack(format!(
+                                        "USB Charging threshold set to {}%",
+                                        threshold
+                                    )),
+                                    Err(e) => Response::Error(e),
+                                }
+                            }
+                            Ok(Command::SetBatteryCalibration(enable)) => {
+                                match HardwareInterface::set_battery_calibration(enable).await {
+                                    Ok(_) => Response::Ack(format!(
+                                        "Battery Calibration set to {}",
+                                        enable
+                                    )),
+                                    Err(e) => Response::Error(e),
+                                }
+                            }
+
+                            // UI wants to trigger an animation
+                            Ok(Command::SetKeyboardAnimation(effect)) => {
+                                match KeyboardInterface::set_animation(&effect) {
+                                    Ok(_) => Response::Ack(format!(
+                                        "Keyboard animation set to '{}'",
+                                        effect
                                     )),
                                     Err(e) => Response::Error(e),
                                 }

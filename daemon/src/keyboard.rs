@@ -64,4 +64,49 @@ impl KeyboardInterface {
         let _ = handle.release_interface(INTERFACE);
         Ok(())
     }
+
+    pub fn set_animation(effect: &str) -> Result<(), String> {
+        let mut handle = rusb::open_device_with_vid_pid(VID, PID)
+            .ok_or("❌ Could not find Acer USB Keyboard!")?;
+
+        let _ = handle.set_auto_detach_kernel_driver(true);
+        handle
+            .claim_interface(INTERFACE)
+            .map_err(|e| format!("USB Claim failed: {}", e))?;
+
+        let req_type = request_type(Direction::Out, RequestType::Class, Recipient::Interface);
+        let timeout = Duration::from_millis(500);
+
+        // 1. Send the Hardware Effect Init sequence (Different from static color!)
+        let init_payload = [0xb1, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4e];
+        let _ = handle.write_control(
+            req_type,
+            9,
+            0x0300,
+            INTERFACE as u16,
+            &init_payload,
+            timeout,
+        );
+
+        // 2. Match the effect to the reverse-engineered Acer payloads
+        let apply_payload = match effect {
+            "neon" => [0x08, 0x02, 0x08, 0x01, 0x32, 0x01, 0x01, 0x9b], // Smooth RGB shifting
+            "wave" => [0x08, 0x02, 0x03, 0x01, 0x32, 0x01, 0x02, 0x9b], // Rainbow wave (Left direction)
+            "breath" => [0x08, 0x02, 0x02, 0x01, 0x32, 0x07, 0x01, 0x9b], // White breathing
+            _ => return Err("Unknown animation effect".to_string()),
+        };
+
+        // 3. Blast the effect command
+        let _ = handle.write_control(
+            req_type,
+            9,
+            0x0300,
+            INTERFACE as u16,
+            &apply_payload,
+            timeout,
+        );
+
+        let _ = handle.release_interface(INTERFACE);
+        Ok(())
+    }
 }

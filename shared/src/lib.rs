@@ -24,7 +24,12 @@ pub enum Command {
     SetFanMode(FanMode),
     SetBatteryLimiter(bool),
     SetKeyboardColor(u8, u8, u8),
-    SetLightbarColor(u8, u8, u8),
+    SetKeyboardAnimation(String),
+    SetLcdOverdrive(bool),
+    SetBootAnimation(bool),
+    SetBacklightTimeout(bool),
+    SetUsbCharging(u8),
+    SetBatteryCalibration(bool),
 }
 
 // ==========================================

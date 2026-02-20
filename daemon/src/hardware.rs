@@ -1,24 +1,46 @@
 use tokio::fs;
+use tokio::process::Command;
 
-const PREDATOR_SENSE_DIR: &str =
-    "/sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense";
+// The base path created by the linuwu_sense kernel module
+const PREDATOR_SENSE_DIR: &str = "/sys/devices/platform/acer-wmi/predator_sense";
 
 pub struct HardwareInterface;
 
 impl HardwareInterface {
+    /// Helper to cleanly read from sysfs
     async fn read_sysfs(filename: &str) -> Result<String, String> {
         let path = format!("{}/{}", PREDATOR_SENSE_DIR, filename);
         match fs::read_to_string(&path).await {
             Ok(content) => Ok(content.trim().to_string()),
-            Err(e) => Err(format!("Failed to read {}: {}", filename, e)),
+            Err(e) => Err(format!("❌ Failed to read {}: {}", filename, e)),
         }
     }
 
+    /// Helper to cleanly write to sysfs
     async fn write_sysfs(filename: &str, value: &str) -> Result<(), String> {
         let path = format!("{}/{}", PREDATOR_SENSE_DIR, filename);
         match fs::write(&path, value).await {
             Ok(_) => Ok(()),
-            Err(e) => Err(format!("Failed to write to {}: {}", filename, e)),
+            Err(e) => Err(format!("❌ Failed to write to {}: {}", filename, e)),
+        }
+    }
+
+    /// Executes nvidia-smi to get the current discrete GPU temperature
+    pub async fn get_gpu_temp() -> Result<u8, String> {
+        let output = Command::new("nvidia-smi")
+            .arg("--query-gpu=temperature.gpu")
+            .arg("--format=csv,noheader")
+            .output()
+            .await
+            .map_err(|e| format!("❌ Failed to execute nvidia-smi: {}", e))?;
+
+        if output.status.success() {
+            let temp_str = String::from_utf8_lossy(&output.stdout);
+            // nvidia-smi outputs a string like "45\n", so we trim and parse it
+            let temp: u8 = temp_str.trim().parse().unwrap_or(0);
+            Ok(temp)
+        } else {
+            Err("❌ nvidia-smi failed. Is the NVIDIA driver installed and active?".to_string())
         }
     }
 
@@ -39,20 +61,20 @@ impl HardwareInterface {
             let gpu = parts[1].parse().unwrap_or(0);
             Ok((cpu, gpu))
         } else {
-            Err("Invalid data format".to_string())
+            Err("❌ Invalid data format".to_string())
         }
     }
 
     /// Reads the actual hardware temperature from the Linux thermal zone
     pub async fn get_cpu_temp() -> Result<u8, String> {
         // Read the raw thermal file
-        match tokio::fs::read_to_string("/sys/class/thermal/thermal_zone0/temp").await {
+        match fs::read_to_string("/sys/class/thermal/thermal_zone0/temp").await {
             Ok(raw) => {
                 let temp_millidegrees: f32 = raw.trim().parse().unwrap_or(0.0);
                 // Convert to Celsius
                 Ok((temp_millidegrees / 1000.0) as u8)
             }
-            Err(e) => Err(format!("Could not read temp: {}", e)),
+            Err(e) => Err(format!("❌ Could not read temp: {}", e)),
         }
     }
 
@@ -74,7 +96,42 @@ impl HardwareInterface {
     // ==========================================
 
     pub async fn set_battery_limiter(enable: bool) -> Result<(), String> {
-        let val = if enable { "1" } else { "0" };
+        let val = if enable { "1\n" } else { "0\n" };
         Self::write_sysfs("battery_limiter", val).await
+    }
+
+    pub async fn set_battery_calibration(enable: bool) -> Result<(), String> {
+        let val = if enable { "1\n" } else { "0\n" };
+        Self::write_sysfs("battery_calibration", val).await
+    }
+
+    // ==========================================
+    // ⚙️ SYSTEM & DISPLAY
+    // ==========================================
+
+    pub async fn set_lcd_overdrive(enable: bool) -> Result<(), String> {
+        let val = if enable { "1\n" } else { "0\n" };
+        Self::write_sysfs("lcd_override", val).await
+    }
+
+    pub async fn set_boot_animation(enable: bool) -> Result<(), String> {
+        let val = if enable { "1\n" } else { "0\n" };
+        Self::write_sysfs("boot_animation_sound", val).await
+    }
+
+    // ==========================================
+    // 💡 KEYBOARD/USB EXTRAS
+    // ==========================================
+
+    pub async fn set_backlight_timeout(enable: bool) -> Result<(), String> {
+        let val = if enable { "1\n" } else { "0\n" };
+        Self::write_sysfs("backlight_timeout", val).await
+    }
+
+    pub async fn set_usb_charging(threshold: u8) -> Result<(), String> {
+        if ![0, 10, 20, 30].contains(&threshold) {
+            return Err("❌ USB threshold must be 0, 10, 20, or 30".to_string());
+        }
+        Self::write_sysfs("usb_charging", &format!("{}\n", threshold)).await
     }
 }
