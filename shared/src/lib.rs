@@ -23,6 +23,8 @@ pub enum Command {
     GetHardwareStatus,
     SetFanMode(FanMode),
     SetBatteryLimiter(bool),
+    SetKeyboardColor(u8, u8, u8),
+    SetLightbarColor(u8, u8, u8),
 }
 
 // ==========================================

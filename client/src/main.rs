@@ -75,14 +75,12 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::R
                 .split(f.size());
 
             // The Controls Menu
-            let controls_text = "
+                let controls_text = "
  🎮 Acer Predator Arch-Sense Control
  -----------------------------------
- [a] Set Fans to Auto
- [b] Set Fans to Balanced
- [t] Set Fans to Turbo (Max)
- 
- [l] Toggle 80% Battery Limiter
+ 🌬️ FANS: [a] Auto | [b] Balanced | [t] Turbo
+ 🔋 PWR:  [l] Toggle 80% Battery Limiter
+ 💡 RGB:  [1] Red | [2] Green | [3] Blue | [4] White | [5] Pink
  
  [q] Quit UI
             ";
@@ -118,6 +116,22 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::R
         {
             match key.code {
                 KeyCode::Char('q') => return Ok(()),
+                KeyCode::Char('1') => {
+                    app.last_response = send_command(Command::SetKeyboardColor(255, 0, 0)).await;
+                }
+                KeyCode::Char('2') => {
+                    app.last_response = send_command(Command::SetKeyboardColor(0, 255, 0)).await;
+                }
+                KeyCode::Char('3') => {
+                    app.last_response = send_command(Command::SetKeyboardColor(0, 0, 255)).await;
+                }
+                KeyCode::Char('4') => {
+                    app.last_response =
+                        send_command(Command::SetKeyboardColor(255, 255, 255)).await;
+                }
+                KeyCode::Char('5') => {
+                    app.last_response = send_command(Command::SetKeyboardColor(255, 0, 255)).await;
+                }
                 KeyCode::Char('a') => {
                     app.last_response = send_command(Command::SetFanMode(FanMode::Auto)).await;
                 }

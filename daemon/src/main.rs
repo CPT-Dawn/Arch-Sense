@@ -1,7 +1,10 @@
 mod hardware;
+mod keyboard;
 
 use hardware::HardwareInterface;
+use keyboard::KeyboardInterface;
 use shared::{Command, FanMode, Response};
+use std::os::unix::fs::PermissionsExt;
 use std::{fs, sync::Arc};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -76,6 +79,11 @@ async fn main() {
 
     // 3. 🎧 THE SOCKET LISTENER (UI Communications)
     let listener = UnixListener::bind(SOCKET_PATH).expect("Failed to bind socket.");
+
+    // 🔓 THE FIX: Make the root-owned socket writable by your normal user!
+    fs::set_permissions(SOCKET_PATH, fs::Permissions::from_mode(0o777))
+        .expect("Failed to set socket permissions");
+
     println!("🎧 Listening for UI commands on {}...", SOCKET_PATH);
 
     loop {
@@ -114,6 +122,16 @@ async fn main() {
                                 }
                             }
 
+                            // UI wants to change the keyboard color!
+                            Ok(Command::SetKeyboardColor(r, g, b)) => {
+                                match KeyboardInterface::set_global_color(r, g, b) {
+                                    Ok(_) => Response::Ack(format!(
+                                        "Keyboard color set to RGB({},{},{})",
+                                        r, g, b
+                                    )),
+                                    Err(e) => Response::Error(e),
+                                }
+                            }
                             // UI wants to change the mode
                             Ok(Command::SetFanMode(new_mode)) => {
                                 // 1. Update our shared state so the background worker knows

@@ -8,3 +8,4 @@ serde_json = "1.0.149"
 shared = { path = "../shared" }
 tokio = { version = "1.0", features = ["full"] }
 tokio-util = "0.7"
+rusb = "0.9"
