@@ -20,6 +20,14 @@ const BRIGHTNESS_STEP: u8 = 10;
 
 const FAN_CURVE: &[(u8, u8)] = &[(40, 20), (55, 40), (70, 65), (85, 100)];
 
+#[derive(Debug, Clone, Default)]
+struct LiveTelemetry {
+    cpu_temp: u8,
+    gpu_temp: u8,
+    cpu_fan_percent: u8,
+    gpu_fan_percent: u8,
+}
+
 fn calculate_fan_speed(current_temp: u8, curve: &[(u8, u8)]) -> u8 {
     if curve.is_empty() {
         return 0;
@@ -59,6 +67,7 @@ async fn main() {
 
     let initial_config = DaemonConfig::load();
     let shared_config = Arc::new(Mutex::new(initial_config.clone()));
+    let live_telemetry = Arc::new(Mutex::new(LiveTelemetry::default()));
 
     println!("Applying persisted hardware state...");
     if let Err(err) = apply_saved_state(&initial_config).await {
@@ -86,6 +95,24 @@ async fn main() {
         }
     });
 
+    let telemetry_for_worker = Arc::clone(&live_telemetry);
+    tokio::spawn(async move {
+        loop {
+            let cpu_temp = HardwareInterface::get_cpu_temp().await.unwrap_or(0);
+            let gpu_temp = HardwareInterface::get_gpu_temp().await.unwrap_or(0);
+            let (cpu_fan_percent, gpu_fan_percent) =
+                HardwareInterface::get_fan_speed().await.unwrap_or((0, 0));
+
+            let mut snapshot = telemetry_for_worker.lock().await;
+            snapshot.cpu_temp = cpu_temp;
+            snapshot.gpu_temp = gpu_temp;
+            snapshot.cpu_fan_percent = cpu_fan_percent;
+            snapshot.gpu_fan_percent = gpu_fan_percent;
+
+            sleep(Duration::from_millis(900)).await;
+        }
+    });
+
     let listener = match UnixListener::bind(SOCKET_PATH) {
         Ok(listener) => listener,
         Err(err) => {
@@ -105,6 +132,7 @@ async fn main() {
         match listener.accept().await {
             Ok((mut socket, _addr)) => {
                 let config_for_socket = Arc::clone(&shared_config);
+                let telemetry_for_socket = Arc::clone(&live_telemetry);
 
                 tokio::spawn(async move {
                     let mut buffer = vec![0; 2048];
@@ -124,7 +152,9 @@ async fn main() {
 
                     let request: Result<Command, _> = serde_json::from_slice(&buffer[..bytes_read]);
                     let response = match request {
-                        Ok(command) => handle_command(command, &config_for_socket).await,
+                        Ok(command) => {
+                            handle_command(command, &config_for_socket, &telemetry_for_socket).await
+                        }
                         Err(err) => Response::Error(format!("Invalid command payload: {err}")),
                     };
 
@@ -137,6 +167,8 @@ async fn main() {
 }
 
 async fn apply_saved_state(config: &DaemonConfig) -> Result<(), String> {
+    HardwareInterface::set_thermal_profile(&config.thermal_profile).await?;
+    HardwareInterface::set_fan_mode(config.fan_mode.clone()).await?;
     HardwareInterface::set_battery_limiter(config.battery_limiter).await?;
     HardwareInterface::set_lcd_overdrive(config.lcd_overdrive).await?;
     HardwareInterface::set_boot_animation(config.boot_animation).await?;
@@ -146,7 +178,11 @@ async fn apply_saved_state(config: &DaemonConfig) -> Result<(), String> {
     KeyboardInterface::apply_mode(&config.rgb_mode, config.rgb_brightness, config.fx_speed)
 }
 
-async fn handle_command(command: Command, shared_config: &Arc<Mutex<DaemonConfig>>) -> Response {
+async fn handle_command(
+    command: Command,
+    shared_config: &Arc<Mutex<DaemonConfig>>,
+    live_telemetry: &Arc<Mutex<LiveTelemetry>>,
+) -> Response {
     match command {
         Command::GetHardwareStatus => {
             let cfg = {
@@ -154,23 +190,67 @@ async fn handle_command(command: Command, shared_config: &Arc<Mutex<DaemonConfig
                 cfg.clone()
             };
 
-            let (cpu_fan, gpu_fan) = HardwareInterface::get_fan_speed().await.unwrap_or((0, 0));
-            let cpu_temp = HardwareInterface::get_cpu_temp().await.unwrap_or(0);
-            let gpu_temp = HardwareInterface::get_gpu_temp().await.unwrap_or(0);
+            let telemetry = {
+                let snapshot = live_telemetry.lock().await;
+                snapshot.clone()
+            };
+
+            let (
+                thermal_profile_res,
+                thermal_choices_res,
+                battery_limiter_res,
+                battery_calibration_res,
+                smart_battery_saver_res,
+                lcd_overdrive_res,
+                boot_animation_res,
+                usb_charging_res,
+            ) = tokio::join!(
+                HardwareInterface::get_thermal_profile(),
+                HardwareInterface::get_thermal_profile_choices(),
+                HardwareInterface::get_battery_limiter(),
+                HardwareInterface::get_battery_calibration(),
+                HardwareInterface::get_backlight_timeout(),
+                HardwareInterface::get_lcd_overdrive(),
+                HardwareInterface::get_boot_animation(),
+                HardwareInterface::get_usb_charging(),
+            );
+
+            let thermal_profile = thermal_profile_res.unwrap_or_else(|_| cfg.thermal_profile.clone());
+            let thermal_profile_choices = thermal_choices_res.unwrap_or_default();
+            let battery_limiter = battery_limiter_res.unwrap_or(cfg.battery_limiter);
+            let battery_calibration = battery_calibration_res.unwrap_or(false);
+            let smart_battery_saver = smart_battery_saver_res.unwrap_or(cfg.smart_battery_saver);
+            let lcd_overdrive = lcd_overdrive_res.unwrap_or(cfg.lcd_overdrive);
+            let boot_animation = boot_animation_res.unwrap_or(cfg.boot_animation);
+            let usb_charging = usb_charging_res.unwrap_or(cfg.usb_charging);
 
             Response::HardwareStatus {
-                cpu_temp,
-                gpu_temp,
-                cpu_fan_percent: cpu_fan,
-                gpu_fan_percent: gpu_fan,
+                cpu_temp: telemetry.cpu_temp,
+                gpu_temp: telemetry.gpu_temp,
+                cpu_fan_percent: telemetry.cpu_fan_percent,
+                gpu_fan_percent: telemetry.gpu_fan_percent,
+                thermal_profile,
+                thermal_profile_choices,
                 fan_mode: cfg.fan_mode,
                 active_rgb_mode: cfg.rgb_mode,
                 rgb_brightness: cfg.rgb_brightness,
                 fx_speed: cfg.fx_speed,
-                smart_battery_saver: cfg.smart_battery_saver,
-                battery_limiter: cfg.battery_limiter,
+                smart_battery_saver,
+                battery_limiter,
+                battery_calibration,
+                lcd_overdrive,
+                boot_animation,
+                usb_charging,
             }
         }
+        Command::SetThermalProfile(profile) => match HardwareInterface::set_thermal_profile(&profile).await
+        {
+            Ok(_) => {
+                persist_config(shared_config, |cfg| cfg.thermal_profile = profile.clone()).await;
+                Response::Ack(format!("Thermal profile set to {profile}"))
+            }
+            Err(err) => Response::Error(err),
+        },
         Command::SetFanMode(new_mode) => match HardwareInterface::set_fan_mode(new_mode.clone()).await {
             Ok(_) => {
                 persist_config(shared_config, |cfg| cfg.fan_mode = new_mode.clone()).await;

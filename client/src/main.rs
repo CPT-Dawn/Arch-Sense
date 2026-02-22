@@ -28,12 +28,18 @@ struct App {
     gpu_fan: u8,
     cpu_temp: u8,
     gpu_temp: u8,
+    thermal_profile: String,
+    thermal_profile_choices: Vec<String>,
     fan_mode: FanMode,
     rgb_mode: RgbMode,
     rgb_brightness: u8,
     fx_speed: u8,
     smart_battery_saver: bool,
     battery_limiter: bool,
+    battery_calibration: bool,
+    lcd_overdrive: bool,
+    boot_animation: bool,
+    usb_charging: u8,
 }
 
 fn get_temp_color(temp: u8) -> Color {
@@ -74,6 +80,31 @@ fn rgb_mode_label(mode: &RgbMode) -> &'static str {
     }
 }
 
+fn bool_label(value: bool) -> &'static str {
+    if value { "Enabled" } else { "Disabled" }
+}
+
+fn cycle_usb_threshold(current: u8) -> u8 {
+    match current {
+        0 => 10,
+        10 => 20,
+        20 => 30,
+        _ => 0,
+    }
+}
+
+fn next_thermal_profile(current: &str, choices: &[String]) -> Option<String> {
+    if choices.is_empty() {
+        return None;
+    }
+
+    if let Some(index) = choices.iter().position(|profile| profile == current) {
+        return Some(choices[(index + 1) % choices.len()].clone());
+    }
+
+    choices.first().cloned()
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     enable_raw_mode()?;
@@ -88,12 +119,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         gpu_fan: 0,
         cpu_temp: 0,
         gpu_temp: 0,
+        thermal_profile: "unknown".to_string(),
+        thermal_profile_choices: Vec::new(),
         fan_mode: FanMode::Auto,
         rgb_mode: RgbMode::Solid(ProfessionalColor::ArchCyan),
         rgb_brightness: 70,
         fx_speed: 50,
         smart_battery_saver: false,
         battery_limiter: false,
+        battery_calibration: false,
+        lcd_overdrive: false,
+        boot_animation: true,
+        usb_charging: 0,
     };
 
     let run_result = run_app(&mut terminal, &mut app).await;
@@ -114,8 +151,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<()> {
-    let tick_rate = Duration::from_millis(500);
-    let mut last_tick = Instant::now();
+    let draw_tick = Duration::from_millis(120);
+    let poll_tick = Duration::from_millis(900);
+    let mut last_draw_tick = Instant::now();
+    let mut last_poll_tick = Instant::now();
 
     loop {
         terminal.draw(|frame| {
@@ -140,8 +179,8 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::R
             draw_footer(frame, root[2], app);
         })?;
 
-        let timeout = tick_rate
-            .checked_sub(last_tick.elapsed())
+        let timeout = draw_tick
+            .checked_sub(last_draw_tick.elapsed())
             .unwrap_or_else(|| Duration::from_secs(0));
 
         if event::poll(timeout)?
@@ -201,19 +240,41 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::R
                 KeyCode::Char('s') => {
                     app.last_response = send_command(Command::ToggleSmartBatterySaver).await
                 }
+                KeyCode::Char('p') => {
+                    if let Some(next) =
+                        next_thermal_profile(&app.thermal_profile, &app.thermal_profile_choices)
+                    {
+                        app.last_response = send_command(Command::SetThermalProfile(next)).await;
+                    } else {
+                        app.last_response =
+                            "✗ No thermal profile choices detected on this system".to_string();
+                    }
+                }
+                KeyCode::Char('u') => {
+                    let next = cycle_usb_threshold(app.usb_charging);
+                    app.last_response = send_command(Command::SetUsbCharging(next)).await
+                }
+                KeyCode::Char('c') => {
+                    app.last_response =
+                        send_command(Command::SetBatteryCalibration(!app.battery_calibration)).await
+                }
                 KeyCode::Char('o') => {
-                    app.last_response = send_command(Command::SetLcdOverdrive(true)).await
+                    app.last_response = send_command(Command::SetLcdOverdrive(!app.lcd_overdrive)).await
                 }
                 KeyCode::Char('m') => {
-                    app.last_response = send_command(Command::SetBootAnimation(false)).await
+                    app.last_response = send_command(Command::SetBootAnimation(!app.boot_animation)).await
                 }
                 _ => {}
             }
         }
 
-        if last_tick.elapsed() >= tick_rate {
+        if last_poll_tick.elapsed() >= poll_tick {
             sync_status(app).await;
-            last_tick = Instant::now();
+            last_poll_tick = Instant::now();
+        }
+
+        if last_draw_tick.elapsed() >= draw_tick {
+            last_draw_tick = Instant::now();
         }
     }
 }
@@ -296,13 +357,18 @@ fn draw_right_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8),
-            Constraint::Min(12),
-            Constraint::Min(10),
+            Constraint::Length(12),
+            Constraint::Length(7),
+            Constraint::Length(7),
+            Constraint::Min(11),
         ])
         .split(area);
 
     let status_lines = vec![
+        Line::from(vec![
+            Span::styled("Thermal: ", Style::default().fg(Color::Gray)),
+            Span::styled(&app.thermal_profile, Style::default().fg(Color::White)),
+        ]),
         Line::from(vec![
             Span::styled("Fan Mode: ", Style::default().fg(Color::Gray)),
             Span::styled(fan_mode_label(&app.fan_mode), Style::default().fg(Color::Green)),
@@ -324,44 +390,86 @@ fn draw_right_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
         ]),
         Line::from(vec![
             Span::styled("Smart Saver: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                if app.smart_battery_saver { "Enabled" } else { "Disabled" },
-                Style::default().fg(if app.smart_battery_saver {
-                    Color::Green
-                } else {
-                    Color::DarkGray
-                }),
-            ),
+            Span::styled(bool_label(app.smart_battery_saver), Style::default().fg(if app.smart_battery_saver {
+                Color::Green
+            } else {
+                Color::DarkGray
+            })),
+        ]),
+        Line::from(vec![
+            Span::styled("Batt Limit: ", Style::default().fg(Color::Gray)),
+            Span::styled(bool_label(app.battery_limiter), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("Calibration: ", Style::default().fg(Color::Gray)),
+            Span::styled(bool_label(app.battery_calibration), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("LCD Override: ", Style::default().fg(Color::Gray)),
+            Span::styled(bool_label(app.lcd_overdrive), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("Boot Sound: ", Style::default().fg(Color::Gray)),
+            Span::styled(bool_label(app.boot_animation), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("USB Charge: ", Style::default().fg(Color::Gray)),
+            Span::styled(format!("{}%", app.usb_charging), Style::default().fg(Color::White)),
         ]),
     ];
 
     let status_block = Paragraph::new(status_lines)
         .block(
             Block::default()
-                .title(" Live State ")
+                .title(" Live Device State ")
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded),
         )
         .alignment(Alignment::Left);
     frame.render_widget(status_block, chunks[0]);
 
+    let thermal_choices = if app.thermal_profile_choices.is_empty() {
+        "Unavailable".to_string()
+    } else {
+        app.thermal_profile_choices.join(" | ")
+    };
+
+    let thermal_controls = Paragraph::new(vec![
+        Line::from(Span::styled(
+            "Thermal Profile (ACPI Platform Profile)",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(format!(" Current: {}", app.thermal_profile)),
+        Line::from(format!(" Choices: {}", thermal_choices)),
+        Line::from(" [p] Cycle to next supported profile"),
+    ])
+    .block(
+        Block::default()
+            .title(" Thermal ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded),
+    );
+    frame.render_widget(thermal_controls, chunks[1]);
+
     let fan_power = Paragraph::new(vec![
         Line::from(Span::styled(
-            "Fans/Power",
+            "Fan Controls (Independent from Thermal Profile)",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::from(" [a] Auto  [b] Balanced  [t] Turbo"),
-        Line::from(" [l] Toggle Battery Limiter"),
+        Line::from(" [a] Auto fan curve  [b] 50/50  [t] 100/100"),
+        Line::from(" Fan mode writes to: predator_sense/fan_speed"),
     ])
     .block(
         Block::default()
-            .title(" Hotkeys ")
+            .title(" Fans ")
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded),
     );
-    frame.render_widget(fan_power, chunks[1]);
+    frame.render_widget(fan_power, chunks[2]);
 
     let illumination_system = Paragraph::new(vec![
         Line::from(Span::styled(
@@ -375,13 +483,15 @@ fn draw_right_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
         Line::from(" [w] Wave  [n] Neon  [+/-] Brightness"),
         Line::from(""),
         Line::from(Span::styled(
-            "System Settings",
+            "Power / System",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )),
+        Line::from(" [l] Battery Limiter  [c] Calibration"),
         Line::from(" [s] Toggle 30s Smart Saver"),
-        Line::from(" [o] LCD Overdrive On   [m] Boot Sound Off"),
+        Line::from(" [o] LCD Override  [m] Boot Animation Sound"),
+        Line::from(" [u] Cycle USB Charging 0/10/20/30"),
         Line::from(" [q] Quit"),
     ])
     .block(
@@ -390,7 +500,7 @@ fn draw_right_panel(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
             .border_type(BorderType::Rounded),
     );
 
-    frame.render_widget(illumination_system, chunks[2]);
+    frame.render_widget(illumination_system, chunks[3]);
 }
 
 fn draw_footer(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
@@ -435,24 +545,36 @@ async fn sync_status(app: &mut App) {
         gpu_temp,
         cpu_fan_percent,
         gpu_fan_percent,
+        thermal_profile,
+        thermal_profile_choices,
         fan_mode,
         active_rgb_mode,
         rgb_brightness,
         fx_speed,
         smart_battery_saver,
         battery_limiter,
+        battery_calibration,
+        lcd_overdrive,
+        boot_animation,
+        usb_charging,
     }) = response
     {
         app.cpu_temp = cpu_temp;
         app.gpu_temp = gpu_temp;
         app.cpu_fan = cpu_fan_percent;
         app.gpu_fan = gpu_fan_percent;
+        app.thermal_profile = thermal_profile;
+        app.thermal_profile_choices = thermal_profile_choices;
         app.fan_mode = fan_mode;
         app.rgb_mode = active_rgb_mode;
         app.rgb_brightness = rgb_brightness;
         app.fx_speed = fx_speed;
         app.smart_battery_saver = smart_battery_saver;
         app.battery_limiter = battery_limiter;
+        app.battery_calibration = battery_calibration;
+        app.lcd_overdrive = lcd_overdrive;
+        app.boot_animation = boot_animation;
+        app.usb_charging = usb_charging;
     }
 }
 

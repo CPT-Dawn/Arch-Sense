@@ -47,6 +47,7 @@ pub enum RgbMode {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Command {
     GetHardwareStatus,
+    SetThermalProfile(String),
     SetFanMode(FanMode),
     SetBatteryLimiter(bool),
     SetRgbMode(RgbMode),
@@ -72,11 +73,17 @@ pub enum Response {
         gpu_temp: u8,
         cpu_fan_percent: u8,
         gpu_fan_percent: u8,
+        thermal_profile: String,
+        thermal_profile_choices: Vec<String>,
         fan_mode: FanMode,
         active_rgb_mode: RgbMode,
         rgb_brightness: u8,
         fx_speed: u8,
         smart_battery_saver: bool,
         battery_limiter: bool,
+        battery_calibration: bool,
+        lcd_overdrive: bool,
+        boot_animation: bool,
+        usb_charging: u8,
     },
 }

@@ -7,7 +7,9 @@ const CONFIG_DIR: &str = "/etc/arch-sense";
 const CONFIG_FILE: &str = "/etc/arch-sense/config.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DaemonConfig {
+    pub thermal_profile: String,
     pub fan_mode: FanMode,
     pub battery_limiter: bool,
     pub rgb_mode: RgbMode,
@@ -23,6 +25,7 @@ pub struct DaemonConfig {
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
+            thermal_profile: "balanced".to_string(),
             fan_mode: FanMode::Auto,
             battery_limiter: false,
             rgb_mode: RgbMode::Solid(ProfessionalColor::ArchCyan),
@@ -39,9 +42,16 @@ impl Default for DaemonConfig {
 impl DaemonConfig {
     pub fn load() -> Self {
         if let Ok(content) = fs::read_to_string(CONFIG_FILE)
-            && let Ok(config) = serde_json::from_str(&content) {
-                return config;
+            && let Ok(mut config) = serde_json::from_str::<Self>(&content)
+        {
+            if config.rgb_brightness > 100 {
+                config.rgb_brightness = 100;
             }
+            if config.thermal_profile.trim().is_empty() {
+                config.thermal_profile = "balanced".to_string();
+            }
+            return config;
+        }
         Self::default()
     }
 
