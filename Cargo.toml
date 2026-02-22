@@ -1,3 +1,14 @@
-[workspace]
-members = ["daemon", "client", "shared"]
-resolver = "2"
+[package]
+name = "arch-sense"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+crossterm = "0.29.0"
+ratatui = "0.30.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

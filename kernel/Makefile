@@ -81,4 +81,3 @@ install: all
 		echo "Warning: Could not detect predator_sense or nitro_sense in sysfs."; \
 	fi
 	@echo "Module $(MODNAME) installed and configured to load at boot."
-
