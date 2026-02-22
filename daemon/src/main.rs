@@ -16,67 +16,55 @@ use tokio::{
 };
 
 const SOCKET_PATH: &str = "/tmp/arch-sense.sock";
+const BRIGHTNESS_STEP: u8 = 10;
 
-// (Temperature °C, Fan Speed %)
-const FAN_CURVE: &[(u8, u8)] = &[
-    (40, 20),  // At 40°C, fans run quietly at 20%
-    (55, 40),  // At 55°C, fans ramp up to 40%
-    (70, 65),  // At 70°C, fans ramp up to 65%
-    (85, 100), // At 85°C+, full 100% blast to save the laptop
-];
+const FAN_CURVE: &[(u8, u8)] = &[(40, 20), (55, 40), (70, 65), (85, 100)];
 
-// Linear Interpolation function
 fn calculate_fan_speed(current_temp: u8, curve: &[(u8, u8)]) -> u8 {
-    if current_temp <= curve[0].0 {
-        return curve[0].1;
+    if curve.is_empty() {
+        return 0;
     }
-    if current_temp >= curve.last().unwrap().0 {
-        return curve.last().unwrap().1;
+
+    let first = curve[0];
+    if current_temp <= first.0 {
+        return first.1;
     }
-    for i in 0..(curve.len() - 1) {
-        let (t1, f1) = curve[i];
-        let (t2, f2) = curve[i + 1];
+
+    if let Some(&(last_temp, last_fan)) = curve.last()
+        && current_temp >= last_temp
+    {
+        return last_fan;
+    }
+
+    for window in curve.windows(2) {
+        let (t1, f1) = window[0];
+        let (t2, f2) = window[1];
         if current_temp >= t1 && current_temp <= t2 {
             let temp_range = (t2 - t1) as f32;
+            if temp_range <= f32::EPSILON {
+                return f2;
+            }
             let fan_range = (f2 - f1) as f32;
             return (f1 as f32 + (((current_temp - t1) as f32 / temp_range) * fan_range)) as u8;
         }
     }
-    0
-}
 
-fn apply_keyboard_profile(cfg: &DaemonConfig) -> Result<(), String> {
-    if let Some((r, g, b)) = cfg.keyboard_color {
-        return KeyboardInterface::set_global_color(r, g, b, cfg.keyboard_brightness);
-    }
-
-    if let Some(effect) = cfg.keyboard_animation.as_deref() {
-        return KeyboardInterface::set_animation(effect, cfg.keyboard_speed, cfg.keyboard_brightness);
-    }
-
-    Ok(())
+    first.1
 }
 
 #[tokio::main]
 async fn main() {
-    println!("🔥 Starting Arch-Sense Background Daemon...");
+    println!("Starting Arch-Sense daemon...");
     let _ = fs::remove_file(SOCKET_PATH);
 
-    // 1. 📂 LOAD PERSISTENT STATE
     let initial_config = DaemonConfig::load();
     let shared_config = Arc::new(Mutex::new(initial_config.clone()));
 
-    // 2. ⚡ APPLY HARDWARE STATE ON BOOT
-    println!("⚙️ Applying saved hardware configuration...");
-    let _ = HardwareInterface::set_battery_limiter(initial_config.battery_limiter).await;
-    let _ = HardwareInterface::set_lcd_overdrive(initial_config.lcd_overdrive).await;
-    let _ = HardwareInterface::set_boot_animation(initial_config.boot_animation).await;
-    let _ = HardwareInterface::set_backlight_timeout(initial_config.backlight_timeout).await;
-    let _ = HardwareInterface::set_usb_charging(initial_config.usb_charging).await;
+    println!("Applying persisted hardware state...");
+    if let Err(err) = apply_saved_state(&initial_config).await {
+        eprintln!("Failed while applying startup state: {err}");
+    }
 
-    let _ = apply_keyboard_profile(&initial_config);
-
-    // 3. 🚀 THE BACKGROUND WORKER (Fan Curve Loop)
     let config_for_worker = Arc::clone(&shared_config);
     tokio::spawn(async move {
         loop {
@@ -98,11 +86,20 @@ async fn main() {
         }
     });
 
-    // 4. 🎧 THE SOCKET LISTENER
-    let listener = UnixListener::bind(SOCKET_PATH).expect("Failed to bind socket.");
-    fs::set_permissions(SOCKET_PATH, fs::Permissions::from_mode(0o777))
-        .expect("Failed to set socket permissions");
-    println!("🎧 Listening for UI commands on {}...", SOCKET_PATH);
+    let listener = match UnixListener::bind(SOCKET_PATH) {
+        Ok(listener) => listener,
+        Err(err) => {
+            eprintln!("Failed to bind socket at {SOCKET_PATH}: {err}");
+            return;
+        }
+    };
+
+    if let Err(err) = fs::set_permissions(SOCKET_PATH, fs::Permissions::from_mode(0o777)) {
+        eprintln!("Failed to set socket permissions: {err}");
+        return;
+    }
+
+    println!("Listening on {SOCKET_PATH}");
 
     loop {
         match listener.accept().await {
@@ -110,223 +107,203 @@ async fn main() {
                 let config_for_socket = Arc::clone(&shared_config);
 
                 tokio::spawn(async move {
-                    let mut buffer = vec![0; 1024];
-                    if let Ok(bytes_read) = socket.read(&mut buffer).await {
-                        if bytes_read == 0 {
+                    let mut buffer = vec![0; 2048];
+                    let bytes_read = match socket.read(&mut buffer).await {
+                        Ok(n) => n,
+                        Err(err) => {
+                            let _ =
+                                write_response(&mut socket, Response::Error(format!("Read failed: {err}")))
+                                    .await;
                             return;
                         }
-                        let request: Result<Command, _> =
-                            serde_json::from_slice(&buffer[..bytes_read]);
+                    };
 
-                        // Lock the state manager!
-                        let mut cfg = config_for_socket.lock().await;
-
-                        let response = match request {
-                            // UI wants live stats
-                            Ok(Command::GetHardwareStatus) => {
-                                let (cpu_fan, gpu_fan) =
-                                    HardwareInterface::get_fan_speed().await.unwrap_or((0, 0));
-                                let cpu_temp = HardwareInterface::get_cpu_temp().await.unwrap_or(0);
-                                let gpu_temp = HardwareInterface::get_gpu_temp().await.unwrap_or(0);
-
-                                Response::HardwareStatus {
-                                    cpu_temp,
-                                    gpu_temp,
-                                    cpu_fan_percent: cpu_fan,
-                                    gpu_fan_percent: gpu_fan,
-                                    active_mode: format!("{:?}", cfg.fan_mode), // Read directly from config
-                                    battery_limiter: cfg.battery_limiter,
-                                    lcd_overdrive: cfg.lcd_overdrive,
-                                    boot_animation: cfg.boot_animation,
-                                    backlight_timeout: cfg.backlight_timeout,
-                                    usb_charging: cfg.usb_charging,
-                                    keyboard_color: cfg.keyboard_color,
-                                    keyboard_animation: cfg.keyboard_animation.clone(),
-                                    keyboard_speed: cfg.keyboard_speed,
-                                    keyboard_brightness: cfg.keyboard_brightness,
-                                }
-                            }
-
-                            // 🌬️ FANS & POWER
-                            Ok(Command::SetFanMode(new_mode)) => {
-                                cfg.fan_mode = new_mode.clone();
-                                cfg.save();
-
-                                if !matches!(new_mode, FanMode::Auto) {
-                                    let _ = HardwareInterface::set_fan_mode(new_mode.clone()).await;
-                                }
-                                Response::Ack(format!("Mode changed to {:?}", new_mode))
-                            }
-                            Ok(Command::SetBatteryLimiter(enable)) => {
-                                cfg.battery_limiter = enable;
-                                cfg.save();
-                                let _ = HardwareInterface::set_battery_limiter(enable).await;
-                                Response::Ack(format!("Battery limiter set to {}", enable))
-                            }
-                            Ok(Command::SetBatteryCalibration(enable)) => {
-                                match HardwareInterface::set_battery_calibration(enable).await {
-                                    Ok(_) => Response::Ack(format!(
-                                        "Battery Calibration set to {}",
-                                        enable
-                                    )),
-                                    Err(e) => Response::Error(e),
-                                }
-                            }
-
-                            // 💡 RGB CONTROLS
-                            Ok(Command::SetKeyboardColor(r, g, b)) => {
-                                cfg.keyboard_color = Some((r, g, b));
-                                cfg.keyboard_animation = None;
-                                cfg.save();
-
-                                match KeyboardInterface::set_global_color(
-                                    r,
-                                    g,
-                                    b,
-                                    cfg.keyboard_brightness,
-                                ) {
-                                    Ok(_) => Response::Ack(format!(
-                                        "Keyboard color set to RGB({},{},{}) @ {}% brightness",
-                                        r, g, b, cfg.keyboard_brightness
-                                    )),
-                                    Err(e) => Response::Error(e),
-                                }
-                            }
-                            Ok(Command::SetKeyboardAnimation(effect)) => {
-                                let effect = effect.to_ascii_lowercase();
-                                cfg.keyboard_animation = Some(effect.clone());
-                                cfg.keyboard_color = None;
-                                cfg.save();
-
-                                match KeyboardInterface::set_animation(
-                                    &effect,
-                                    cfg.keyboard_speed,
-                                    cfg.keyboard_brightness,
-                                ) {
-                                    Ok(_) => Response::Ack(format!(
-                                        "Keyboard animation set to '{}' (speed {}, brightness {}%)",
-                                        effect, cfg.keyboard_speed, cfg.keyboard_brightness
-                                    )),
-                                    Err(e) => Response::Error(e),
-                                }
-                            }
-                            Ok(Command::SetKeyboardSpeed(speed)) => {
-                                if !(1..=10).contains(&speed) {
-                                    Response::Error(
-                                        "Keyboard speed must be between 1 and 10".to_string(),
-                                    )
-                                } else {
-                                    cfg.keyboard_speed = speed;
-                                    cfg.save();
-
-                                    if let Some(effect) = cfg.keyboard_animation.clone() {
-                                        match KeyboardInterface::set_animation(
-                                            &effect,
-                                            cfg.keyboard_speed,
-                                            cfg.keyboard_brightness,
-                                        ) {
-                                            Ok(_) => Response::Ack(format!(
-                                                "Keyboard speed set to {}",
-                                                speed
-                                            )),
-                                            Err(e) => Response::Error(e),
-                                        }
-                                    } else {
-                                        Response::Ack(format!(
-                                            "Keyboard speed saved as {} (applies to animated modes)",
-                                            speed
-                                        ))
-                                    }
-                                }
-                            }
-                            Ok(Command::SetKeyboardBrightness(brightness)) => {
-                                if brightness > 100 {
-                                    Response::Error(
-                                        "Keyboard brightness must be between 0 and 100"
-                                            .to_string(),
-                                    )
-                                } else {
-                                    cfg.keyboard_brightness = brightness;
-                                    cfg.save();
-
-                                    match apply_keyboard_profile(&cfg) {
-                                        Ok(_) => Response::Ack(format!(
-                                            "Keyboard brightness set to {}%",
-                                            brightness
-                                        )),
-                                        Err(e) => Response::Error(e),
-                                    }
-                                }
-                            }
-
-                            // ⚙️ SYSTEM TOGGLES
-                            Ok(Command::SetLcdOverdrive(enable)) => {
-                                cfg.lcd_overdrive = enable;
-                                cfg.save();
-
-                                match HardwareInterface::set_lcd_overdrive(enable).await {
-                                    Ok(_) => {
-                                        Response::Ack(format!("LCD Overdrive set to {}", enable))
-                                    }
-                                    Err(e) => Response::Error(e),
-                                }
-                            }
-                            Ok(Command::SetBootAnimation(enable)) => {
-                                cfg.boot_animation = enable;
-                                cfg.save();
-
-                                match HardwareInterface::set_boot_animation(enable).await {
-                                    Ok(_) => {
-                                        Response::Ack(format!("Boot Animation set to {}", enable))
-                                    }
-                                    Err(e) => Response::Error(e),
-                                }
-                            }
-                            Ok(Command::SetBacklightTimeout(enable)) => {
-                                cfg.backlight_timeout = enable;
-                                cfg.save();
-
-                                match HardwareInterface::set_backlight_timeout(enable).await {
-                                    Ok(_) => {
-                                        Response::Ack(format!("Keyboard Timeout set to {}", enable))
-                                    }
-                                    Err(e) => Response::Error(e),
-                                }
-                            }
-                            Ok(Command::SetUsbCharging(threshold)) => {
-                                cfg.usb_charging = threshold;
-                                cfg.save();
-
-                                match HardwareInterface::set_usb_charging(threshold).await {
-                                    Ok(_) => Response::Ack(format!(
-                                        "USB Charging threshold set to {}%",
-                                        threshold
-                                    )),
-                                    Err(e) => Response::Error(e),
-                                }
-                            }
-
-                            _ => Response::Error("Unknown command".to_string()),
-                        };
-
-                        match serde_json::to_vec(&response) {
-                            Ok(response_bytes) => {
-                                let _ = socket.write_all(&response_bytes).await;
-                            }
-                            Err(e) => {
-                                let fallback = Response::Error(format!(
-                                    "Failed to serialize daemon response: {}",
-                                    e
-                                ));
-                                if let Ok(bytes) = serde_json::to_vec(&fallback) {
-                                    let _ = socket.write_all(&bytes).await;
-                                }
-                            }
-                        }
+                    if bytes_read == 0 {
+                        return;
                     }
+
+                    let request: Result<Command, _> = serde_json::from_slice(&buffer[..bytes_read]);
+                    let response = match request {
+                        Ok(command) => handle_command(command, &config_for_socket).await,
+                        Err(err) => Response::Error(format!("Invalid command payload: {err}")),
+                    };
+
+                    let _ = write_response(&mut socket, response).await;
                 });
             }
-            Err(e) => eprintln!("❌ Error accepting connection: {}", e),
+            Err(err) => eprintln!("Accept error: {err}"),
         }
     }
+}
+
+async fn apply_saved_state(config: &DaemonConfig) -> Result<(), String> {
+    HardwareInterface::set_battery_limiter(config.battery_limiter).await?;
+    HardwareInterface::set_lcd_overdrive(config.lcd_overdrive).await?;
+    HardwareInterface::set_boot_animation(config.boot_animation).await?;
+    HardwareInterface::set_backlight_timeout(config.smart_battery_saver).await?;
+    HardwareInterface::set_usb_charging(config.usb_charging).await?;
+
+    KeyboardInterface::apply_mode(&config.rgb_mode, config.rgb_brightness, config.fx_speed)
+}
+
+async fn handle_command(command: Command, shared_config: &Arc<Mutex<DaemonConfig>>) -> Response {
+    match command {
+        Command::GetHardwareStatus => {
+            let cfg = {
+                let cfg = shared_config.lock().await;
+                cfg.clone()
+            };
+
+            let (cpu_fan, gpu_fan) = HardwareInterface::get_fan_speed().await.unwrap_or((0, 0));
+            let cpu_temp = HardwareInterface::get_cpu_temp().await.unwrap_or(0);
+            let gpu_temp = HardwareInterface::get_gpu_temp().await.unwrap_or(0);
+
+            Response::HardwareStatus {
+                cpu_temp,
+                gpu_temp,
+                cpu_fan_percent: cpu_fan,
+                gpu_fan_percent: gpu_fan,
+                fan_mode: cfg.fan_mode,
+                active_rgb_mode: cfg.rgb_mode,
+                rgb_brightness: cfg.rgb_brightness,
+                fx_speed: cfg.fx_speed,
+                smart_battery_saver: cfg.smart_battery_saver,
+                battery_limiter: cfg.battery_limiter,
+            }
+        }
+        Command::SetFanMode(new_mode) => match HardwareInterface::set_fan_mode(new_mode.clone()).await {
+            Ok(_) => {
+                persist_config(shared_config, |cfg| cfg.fan_mode = new_mode.clone()).await;
+                Response::Ack(format!("Fan mode set to {:?}", new_mode))
+            }
+            Err(err) => Response::Error(err),
+        },
+        Command::SetBatteryLimiter(enable) => {
+            match HardwareInterface::set_battery_limiter(enable).await {
+                Ok(_) => {
+                    persist_config(shared_config, |cfg| cfg.battery_limiter = enable).await;
+                    Response::Ack(format!("Battery limiter set to {enable}"))
+                }
+                Err(err) => Response::Error(err),
+            }
+        }
+        Command::SetBatteryCalibration(enable) => {
+            match HardwareInterface::set_battery_calibration(enable).await {
+                Ok(_) => Response::Ack(format!("Battery calibration set to {enable}")),
+                Err(err) => Response::Error(err),
+            }
+        }
+        Command::SetRgbMode(mode) => {
+            let snapshot = {
+                let cfg = shared_config.lock().await;
+                (cfg.rgb_brightness, cfg.fx_speed)
+            };
+
+            match KeyboardInterface::apply_mode(&mode, snapshot.0, snapshot.1) {
+                Ok(_) => {
+                    persist_config(shared_config, |cfg| cfg.rgb_mode = mode.clone()).await;
+                    Response::Ack(format!("RGB mode set to {:?}", mode))
+                }
+                Err(err) => Response::Error(err),
+            }
+        }
+        Command::IncreaseRgbBrightness => {
+            update_brightness(shared_config, true).await
+        }
+        Command::DecreaseRgbBrightness => {
+            update_brightness(shared_config, false).await
+        }
+        Command::ToggleSmartBatterySaver => {
+            let target = {
+                let cfg = shared_config.lock().await;
+                !cfg.smart_battery_saver
+            };
+
+            match HardwareInterface::set_backlight_timeout(target).await {
+                Ok(_) => {
+                    persist_config(shared_config, |cfg| cfg.smart_battery_saver = target).await;
+                    Response::Ack(format!(
+                        "30-second Smart Battery Saver {}",
+                        if target { "enabled" } else { "disabled" }
+                    ))
+                }
+                Err(err) => Response::Error(err),
+            }
+        }
+        Command::SetLcdOverdrive(enable) => match HardwareInterface::set_lcd_overdrive(enable).await {
+            Ok(_) => {
+                persist_config(shared_config, |cfg| cfg.lcd_overdrive = enable).await;
+                Response::Ack(format!("LCD overdrive set to {enable}"))
+            }
+            Err(err) => Response::Error(err),
+        },
+        Command::SetBootAnimation(enable) => match HardwareInterface::set_boot_animation(enable).await {
+            Ok(_) => {
+                persist_config(shared_config, |cfg| cfg.boot_animation = enable).await;
+                Response::Ack(format!("Boot animation set to {enable}"))
+            }
+            Err(err) => Response::Error(err),
+        },
+        Command::SetUsbCharging(threshold) => {
+            match HardwareInterface::set_usb_charging(threshold).await {
+                Ok(_) => {
+                    persist_config(shared_config, |cfg| cfg.usb_charging = threshold).await;
+                    Response::Ack(format!("USB charging threshold set to {threshold}%"))
+                }
+                Err(err) => Response::Error(err),
+            }
+        }
+    }
+}
+
+async fn update_brightness(shared_config: &Arc<Mutex<DaemonConfig>>, increase: bool) -> Response {
+    let (mode, current, fx_speed) = {
+        let cfg = shared_config.lock().await;
+        (cfg.rgb_mode.clone(), cfg.rgb_brightness, cfg.fx_speed)
+    };
+
+    let target = if increase {
+        current.saturating_add(BRIGHTNESS_STEP).min(100)
+    } else {
+        current.saturating_sub(BRIGHTNESS_STEP)
+    };
+
+    if target == current {
+        return Response::Ack(format!("RGB brightness remains at {current}%"));
+    }
+
+    match KeyboardInterface::apply_mode(&mode, target, fx_speed) {
+        Ok(_) => {
+            persist_config(shared_config, |cfg| cfg.rgb_brightness = target).await;
+            Response::Ack(format!("RGB brightness set to {target}%"))
+        }
+        Err(err) => Response::Error(err),
+    }
+}
+
+async fn persist_config<F>(shared_config: &Arc<Mutex<DaemonConfig>>, mutate: F)
+where
+    F: FnOnce(&mut DaemonConfig),
+{
+    let mut cfg = shared_config.lock().await;
+    mutate(&mut cfg);
+    cfg.save();
+}
+
+async fn write_response(
+    socket: &mut tokio::net::UnixStream,
+    response: Response,
+) -> Result<(), std::io::Error> {
+    let response_bytes = match serde_json::to_vec(&response) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            let fallback = Response::Error(format!("Response serialization failed: {err}"));
+            match serde_json::to_vec(&fallback) {
+                Ok(bytes) => bytes,
+                Err(_) => return Ok(()),
+            }
+        }
+    };
+
+    socket.write_all(&response_bytes).await
 }

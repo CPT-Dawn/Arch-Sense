@@ -14,6 +14,32 @@ pub enum FanMode {
     Custom(u8, u8),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ProfessionalColor {
+    ArcticWhite,
+    ArchCyan,
+    NightShiftRed,
+    EyeCareAmber,
+}
+
+impl ProfessionalColor {
+    pub fn rgb(&self) -> (u8, u8, u8) {
+        match self {
+            Self::ArcticWhite => (255, 255, 255),
+            Self::ArchCyan => (0, 150, 255),
+            Self::NightShiftRed => (255, 0, 0),
+            Self::EyeCareAmber => (255, 150, 0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RgbMode {
+    Solid(ProfessionalColor),
+    Wave,
+    Neon,
+}
+
 // ==========================================
 // THE COMMANDS (Client -> Daemon)
 // ==========================================
@@ -23,13 +49,12 @@ pub enum Command {
     GetHardwareStatus,
     SetFanMode(FanMode),
     SetBatteryLimiter(bool),
-    SetKeyboardColor(u8, u8, u8),
-    SetKeyboardAnimation(String),
-    SetKeyboardSpeed(u8),
-    SetKeyboardBrightness(u8),
+    SetRgbMode(RgbMode),
+    IncreaseRgbBrightness,
+    DecreaseRgbBrightness,
+    ToggleSmartBatterySaver,
     SetLcdOverdrive(bool),
     SetBootAnimation(bool),
-    SetBacklightTimeout(bool),
     SetUsbCharging(u8),
     SetBatteryCalibration(bool),
 }
@@ -47,15 +72,11 @@ pub enum Response {
         gpu_temp: u8,
         cpu_fan_percent: u8,
         gpu_fan_percent: u8,
-        active_mode: String,
+        fan_mode: FanMode,
+        active_rgb_mode: RgbMode,
+        rgb_brightness: u8,
+        fx_speed: u8,
+        smart_battery_saver: bool,
         battery_limiter: bool,
-        lcd_overdrive: bool,
-        boot_animation: bool,
-        backlight_timeout: bool,
-        usb_charging: u8,
-        keyboard_color: Option<(u8, u8, u8)>,
-        keyboard_animation: Option<String>,
-        keyboard_speed: u8,
-        keyboard_brightness: u8,
     },
 }

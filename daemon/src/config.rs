@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use shared::FanMode;
+use shared::{FanMode, ProfessionalColor, RgbMode};
 use std::fs;
 use std::path::Path;
 
@@ -10,24 +10,13 @@ const CONFIG_FILE: &str = "/etc/arch-sense/config.json";
 pub struct DaemonConfig {
     pub fan_mode: FanMode,
     pub battery_limiter: bool,
-    pub keyboard_color: Option<(u8, u8, u8)>,
-    pub keyboard_animation: Option<String>,
-    #[serde(default = "default_keyboard_speed")]
-    pub keyboard_speed: u8,
-    #[serde(default = "default_keyboard_brightness")]
-    pub keyboard_brightness: u8,
+    pub rgb_mode: RgbMode,
+    pub rgb_brightness: u8,
+    pub fx_speed: u8,
     pub lcd_overdrive: bool,
     pub boot_animation: bool,
-    pub backlight_timeout: bool,
+    pub smart_battery_saver: bool,
     pub usb_charging: u8,
-}
-
-fn default_keyboard_speed() -> u8 {
-    5
-}
-
-fn default_keyboard_brightness() -> u8 {
-    100
 }
 
 // 🌟 Default settings if the file doesn't exist yet
@@ -36,13 +25,12 @@ impl Default for DaemonConfig {
         Self {
             fan_mode: FanMode::Auto,
             battery_limiter: false,
-            keyboard_color: Some((0, 255, 255)), // Default Cyan
-            keyboard_animation: None,
-            keyboard_speed: default_keyboard_speed(),
-            keyboard_brightness: default_keyboard_brightness(),
+            rgb_mode: RgbMode::Solid(ProfessionalColor::ArchCyan),
+            rgb_brightness: 70,
+            fx_speed: 50,
             lcd_overdrive: false,
             boot_animation: true,
-            backlight_timeout: false,
+            smart_battery_saver: false,
             usb_charging: 0,
         }
     }

@@ -48,10 +48,6 @@ impl HardwareInterface {
     // FAN CONTROLS
     // ==========================================
 
-    pub async fn get_fan_mode() -> Result<String, String> {
-        Self::read_sysfs("fan_speed").await
-    }
-
     /// Gets the current fan speed as percentages (CPU, GPU)
     pub async fn get_fan_speed() -> Result<(u8, u8), String> {
         let data = Self::read_sysfs("fan_speed").await?;
