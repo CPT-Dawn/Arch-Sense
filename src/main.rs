@@ -1,30 +1,49 @@
 //! # Arch-Sense — Acer Predator Control Center TUI
 //!
 //! A modern terminal UI for managing Acer Predator laptop settings on Arch Linux.
-//! Reads sensor data (CPU/GPU temps, fan speeds) and controls hardware settings
-//! via the linuwu_sense kernel module sysfs interface.
+//! Controls hardware settings via the linuwu_sense kernel module and
+//! keyboard RGB lighting via USB HID protocol (ported from ph16-71-rgb Python).
 //!
-//! Run with: `sudo arch-sense`
+//! ## Usage
+//!   sudo arch-sense          # Launch TUI
+//!   sudo arch-sense --apply  # Apply saved RGB settings and exit (for systemd)
+//!
+//! ## Dependencies
+//!   pacman -S libusb         # Required for USB keyboard communication
 
 use std::fs;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::*;
+use serde::{Deserialize, Serialize};
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  File Paths
+//  Constants & Paths
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const PS_BASE: &str = "/sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense";
 const PLATFORM_PROFILE: &str = "/sys/firmware/acpi/platform_profile";
 const PROFILE_CHOICES: &str = "/sys/firmware/acpi/platform_profile_choices";
 const CPU_TEMP_PATH: &str = "/sys/class/thermal/thermal_zone0/temp";
-
 const TICK: Duration = Duration::from_secs(1);
+
+// USB keyboard (Acer Predator PH16-71)
+const KB_VID: u16 = 0x04F2;
+const KB_PID: u16 = 0x0117;
+const KB_IFACE: u8 = 3;
+const KB_EP: u8 = 0x04;
+const USB_TIMEOUT: Duration = Duration::from_millis(1000);
+
+// RGB protocol limits
+const BRIGHT_HW_MAX: u8 = 50; // 0x32
+const SPEED_HW_FAST: u8 = 1;
+const SPEED_HW_SLOW: u8 = 9;
+const PREAMBLE: [u8; 8] = [0xB1, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4E];
 
 fn ps(name: &str) -> String {
     format!("{PS_BASE}/{name}")
@@ -37,23 +56,18 @@ fn ps(name: &str) -> String {
 struct Theme;
 
 impl Theme {
-    // Greens
-    const ACCENT: Color = Color::Rgb(57, 255, 20); // neon green
-    const ACCENT2: Color = Color::Rgb(0, 200, 60); // medium green
-    const DIM: Color = Color::Rgb(0, 140, 40); // dim green
-    const DARK: Color = Color::Rgb(0, 60, 20); // dark green
-    const BG_HL: Color = Color::Rgb(10, 40, 15); // highlight bg
-    const BG_HEADER: Color = Color::Rgb(5, 20, 8); // header bg
-
-    // Text
-    const FG: Color = Color::Rgb(210, 225, 210); // primary text
-    const FG_DIM: Color = Color::Rgb(100, 130, 100); // dimmed text
-
-    // Temperatures / alerts
-    const COOL: Color = Color::Rgb(57, 255, 20); // cool = green
-    const WARM: Color = Color::Rgb(255, 200, 0); // warm = yellow
-    const HOT: Color = Color::Rgb(255, 50, 30); // hot = red
-    const ERR: Color = Color::Rgb(255, 70, 50); // error text
+    const ACCENT: Color = Color::Rgb(57, 255, 20);
+    const ACCENT2: Color = Color::Rgb(0, 200, 60);
+    const DIM: Color = Color::Rgb(0, 140, 40);
+    const DARK: Color = Color::Rgb(0, 60, 20);
+    const BG_HL: Color = Color::Rgb(10, 40, 15);
+    const BG_HEADER: Color = Color::Rgb(5, 20, 8);
+    const FG: Color = Color::Rgb(210, 225, 210);
+    const FG_DIM: Color = Color::Rgb(100, 130, 100);
+    const COOL: Color = Color::Rgb(57, 255, 20);
+    const WARM: Color = Color::Rgb(255, 200, 0);
+    const HOT: Color = Color::Rgb(255, 50, 30);
+    const ERR: Color = Color::Rgb(255, 70, 50);
 
     fn temp_color(c: f64) -> Color {
         if c < 55.0 {
@@ -79,20 +93,77 @@ impl Theme {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  System I/O — Reading and writing sysfs files
+//  Config Persistence  (~/.config/arch-sense/config.json)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Read a sysfs file, returning `None` if it doesn't exist or can't be read.
+fn config_dir() -> PathBuf {
+    // When running via sudo, save config in the real user's home
+    let home = std::env::var("SUDO_USER")
+        .ok()
+        .map(|u| format!("/home/{u}"))
+        .or_else(|| std::env::var("HOME").ok())
+        .unwrap_or_else(|| "/tmp".into());
+    PathBuf::from(home).join(".config").join("arch-sense")
+}
+
+fn config_path() -> PathBuf {
+    config_dir().join("config.json")
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct RgbConfig {
+    effect: usize,
+    color: usize,
+    brightness: u8,
+    speed: u8,
+    direction: usize,
+}
+
+impl Default for RgbConfig {
+    fn default() -> Self {
+        Self {
+            effect: 1, // Static
+            color: 9,  // White
+            brightness: 80,
+            speed: 50,
+            direction: 0, // Right
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct AppConfig {
+    rgb: RgbConfig,
+}
+
+impl AppConfig {
+    fn load() -> Self {
+        fs::read_to_string(config_path())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    fn save(&self) -> Result<()> {
+        fs::create_dir_all(config_dir())?;
+        let json = serde_json::to_string_pretty(self)?;
+        fs::write(config_path(), json)?;
+        Ok(())
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  System I/O — Reading & Writing sysfs
+// ═══════════════════════════════════════════════════════════════════════════════
+
 fn sysfs_read(path: &str) -> Option<String> {
     fs::read_to_string(path).ok().map(|s| s.trim().to_string())
 }
 
-/// Write a value to a sysfs file. Requires root permissions.
 fn sysfs_write(path: &str, val: &str) -> Result<()> {
     fs::write(path, val).map_err(|e| anyhow::anyhow!("{e} — writing '{val}' to {path}"))
 }
 
-/// Read CPU temperature from thermal_zone0 (returns °C).
 fn cpu_temp() -> Option<f64> {
     sysfs_read(CPU_TEMP_PATH)?
         .parse::<f64>()
@@ -100,7 +171,6 @@ fn cpu_temp() -> Option<f64> {
         .map(|t| t / 1000.0)
 }
 
-/// Read GPU temperature via nvidia-smi (returns °C).
 fn gpu_temp() -> Option<f64> {
     let out = Command::new("nvidia-smi")
         .args([
@@ -116,7 +186,6 @@ fn gpu_temp() -> Option<f64> {
     }
 }
 
-/// Read CPU and GPU fan speed percentages from linuwu_sense.
 fn fan_speeds() -> (Option<u32>, Option<u32>) {
     let s = match sysfs_read(&ps("fan_speed")) {
         Some(s) => s,
@@ -129,7 +198,6 @@ fn fan_speeds() -> (Option<u32>, Option<u32>) {
     )
 }
 
-/// Read available thermal profile choices.
 fn thermal_choices() -> Vec<String> {
     sysfs_read(PROFILE_CHOICES)
         .map(|s| s.split_whitespace().map(String::from).collect())
@@ -137,7 +205,286 @@ fn thermal_choices() -> Vec<String> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Settings Model
+//  RGB Keyboard USB Protocol (ported from ph16-71-rgb Python)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Clone, Copy, PartialEq)]
+struct Rgb {
+    r: u8,
+    g: u8,
+    b: u8,
+}
+
+const COLOR_PALETTE: &[(&str, Rgb)] = &[
+    ("Red", Rgb { r: 255, g: 0, b: 0 }),
+    (
+        "Orange",
+        Rgb {
+            r: 255,
+            g: 128,
+            b: 0,
+        },
+    ),
+    (
+        "Gold",
+        Rgb {
+            r: 255,
+            g: 215,
+            b: 0,
+        },
+    ),
+    ("Green", Rgb { r: 0, g: 255, b: 0 }),
+    (
+        "Cyan",
+        Rgb {
+            r: 0,
+            g: 255,
+            b: 255,
+        },
+    ),
+    ("Blue", Rgb { r: 0, g: 0, b: 255 }),
+    (
+        "Purple",
+        Rgb {
+            r: 128,
+            g: 0,
+            b: 255,
+        },
+    ),
+    (
+        "Magenta",
+        Rgb {
+            r: 255,
+            g: 0,
+            b: 255,
+        },
+    ),
+    (
+        "Pink",
+        Rgb {
+            r: 255,
+            g: 105,
+            b: 180,
+        },
+    ),
+    (
+        "White",
+        Rgb {
+            r: 255,
+            g: 255,
+            b: 255,
+        },
+    ),
+    ("Random", Rgb { r: 0, g: 0, b: 0 }),
+];
+
+const RANDOM_COLOR_IDX: usize = 10;
+
+struct EffectDef {
+    name: &'static str,
+    opcode: u8, // byte 3 of the effect command
+    has_color: bool,
+    has_dir: bool,
+}
+
+const EFFECTS: &[EffectDef] = &[
+    EffectDef {
+        name: "Off",
+        opcode: 0x01,
+        has_color: false,
+        has_dir: false,
+    },
+    EffectDef {
+        name: "Static",
+        opcode: 0x01,
+        has_color: true,
+        has_dir: false,
+    },
+    EffectDef {
+        name: "Breathing",
+        opcode: 0x02,
+        has_color: true,
+        has_dir: false,
+    },
+    EffectDef {
+        name: "Wave",
+        opcode: 0x03,
+        has_color: false,
+        has_dir: true,
+    },
+    EffectDef {
+        name: "Snake",
+        opcode: 0x05,
+        has_color: true,
+        has_dir: false,
+    },
+    EffectDef {
+        name: "Ripple",
+        opcode: 0x06,
+        has_color: true,
+        has_dir: false,
+    },
+    EffectDef {
+        name: "Neon",
+        opcode: 0x08,
+        has_color: false,
+        has_dir: false,
+    },
+    EffectDef {
+        name: "Rain",
+        opcode: 0x0A,
+        has_color: true,
+        has_dir: false,
+    },
+    EffectDef {
+        name: "Lightning",
+        opcode: 0x12,
+        has_color: true,
+        has_dir: false,
+    },
+    EffectDef {
+        name: "Spot",
+        opcode: 0x25,
+        has_color: true,
+        has_dir: false,
+    },
+    EffectDef {
+        name: "Stars",
+        opcode: 0x26,
+        has_color: true,
+        has_dir: false,
+    },
+    EffectDef {
+        name: "Fireball",
+        opcode: 0x27,
+        has_color: true,
+        has_dir: false,
+    },
+    EffectDef {
+        name: "Snow",
+        opcode: 0x28,
+        has_color: true,
+        has_dir: false,
+    },
+    EffectDef {
+        name: "Heartbeat",
+        opcode: 0x29,
+        has_color: true,
+        has_dir: false,
+    },
+];
+
+const OFF_EFFECT_IDX: usize = 0;
+
+const DIRECTIONS: &[&str] = &["Right", "Left", "Up", "Down", "Clockwise", "Counter-CW"];
+
+/// Build the 8-byte color-load packet: 14 00 00 RR GG BB 00 00
+fn make_color_pkt(c: Rgb) -> [u8; 8] {
+    [0x14, 0x00, 0x00, c.r, c.g, c.b, 0x00, 0x00]
+}
+
+/// Build the 8-byte effect packet: 08 02 OP SPEED BRIGHT COLOR_PRESET DIR 9B
+fn make_effect_pkt(
+    eff: &EffectDef,
+    speed_pct: u8,
+    bright_pct: u8,
+    color_idx: usize,
+    dir_idx: usize,
+) -> [u8; 8] {
+    let hw_bright = ((bright_pct as u16) * BRIGHT_HW_MAX as u16 / 100) as u8;
+    let hw_speed = if speed_pct >= 100 {
+        SPEED_HW_FAST
+    } else {
+        let range = (SPEED_HW_SLOW - SPEED_HW_FAST) as u16;
+        (SPEED_HW_SLOW - (speed_pct as u16 * range / 100) as u8).max(SPEED_HW_FAST)
+    };
+    let color_preset: u8 = if color_idx == RANDOM_COLOR_IDX {
+        0x08
+    } else {
+        0x01
+    };
+    let dir_byte: u8 = if eff.has_dir {
+        (dir_idx as u8) + 1
+    } else {
+        0x01
+    };
+    [
+        0x08,
+        0x02,
+        eff.opcode,
+        hw_speed,
+        hw_bright,
+        color_preset,
+        dir_byte,
+        0x9B,
+    ]
+}
+
+/// Send USB HID commands to the keyboard.
+fn send_usb_commands(commands: &[&[u8]]) -> Result<String> {
+    let handle = rusb::open_device_with_vid_pid(KB_VID, KB_PID)
+        .context("Keyboard not found (VID:04F2 PID:0117). Ensure connected & run with sudo.")?;
+
+    let was_attached = handle.kernel_driver_active(KB_IFACE).unwrap_or(false);
+    if was_attached {
+        handle
+            .detach_kernel_driver(KB_IFACE)
+            .context("Failed to detach kernel driver from interface 3")?;
+    }
+
+    handle
+        .claim_interface(KB_IFACE)
+        .context("Failed to claim USB interface 3")?;
+
+    let _ = handle.clear_halt(KB_EP); // ignore errors, not all devices need it
+
+    for cmd in commands {
+        // bmRequestType 0x21 = Host-to-Device | Class | Interface
+        // bRequest 0x09 = SET_REPORT
+        // wValue 0x0300, wIndex = interface 3
+        handle
+            .write_control(0x21, 0x09, 0x0300, KB_IFACE as u16, cmd, USB_TIMEOUT)
+            .context("USB control transfer failed")?;
+    }
+
+    handle
+        .release_interface(KB_IFACE)
+        .context("Failed to release USB interface")?;
+
+    if was_attached {
+        let _ = handle.attach_kernel_driver(KB_IFACE);
+    }
+
+    Ok("RGB applied successfully".into())
+}
+
+/// Apply current RGB state to the keyboard hardware.
+fn send_rgb(rgb: &RgbState) -> Result<String> {
+    let eff = &EFFECTS[rgb.effect_idx];
+
+    // "Off" = static with brightness 0
+    if rgb.effect_idx == OFF_EFFECT_IDX {
+        return send_usb_commands(&[&PREAMBLE, &[0x08, 0x02, 0x01, 0x00, 0x00, 0x01, 0x01, 0x9B]]);
+    }
+
+    let color_pkt = make_color_pkt(COLOR_PALETTE[rgb.color_idx].1);
+    let effect_pkt = make_effect_pkt(eff, rgb.speed, rgb.brightness, rgb.color_idx, rgb.dir_idx);
+
+    let mut cmds: Vec<&[u8]> = vec![&PREAMBLE];
+    if eff.has_color && rgb.color_idx != RANDOM_COLOR_IDX {
+        cmds.push(&color_pkt);
+    }
+    cmds.push(&effect_pkt);
+
+    send_usb_commands(&cmds)
+}
+
+fn is_kb_present() -> bool {
+    rusb::open_device_with_vid_pid(KB_VID, KB_PID).is_some()
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Settings Model (Hardware Controls)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 #[derive(Clone, PartialEq)]
@@ -152,111 +499,161 @@ enum Sid {
     Usb,
 }
 
+#[derive(Clone)]
+struct CtrlOpt {
+    value: String,
+    label: String,
+}
+
+fn co(v: &str, l: &str) -> CtrlOpt {
+    CtrlOpt {
+        value: v.into(),
+        label: l.into(),
+    }
+}
+
+#[derive(Clone)]
+enum SettingKind {
+    Toggle,
+    Cycle(Vec<CtrlOpt>),
+}
+
 struct Setting {
     id: Sid,
     label: &'static str,
     desc: &'static str,
-    hint: String,
-    raw: String,     // raw value from sysfs
-    display: String, // human-readable display
+    raw: String,
+    display: String,
+    kind: SettingKind,
+    pending: Option<usize>, // cycle preview index
 }
 
-/// Build / refresh all settings from live sysfs reads.
 fn load_settings(choices: &[String]) -> Vec<Setting> {
-    let r = |name: &str| sysfs_read(&ps(name)).unwrap_or_else(|| "N/A".into());
+    let r = |name: &str| sysfs_read(&ps(name)).unwrap_or("N/A".into());
     let on_off = |v: &str| match v {
         "1" => "Enabled".into(),
         "0" => "Disabled".into(),
         o => o.to_string(),
     };
 
-    let tp = sysfs_read(PLATFORM_PROFILE).unwrap_or_else(|| "N/A".into());
+    let tp = sysfs_read(PLATFORM_PROFILE).unwrap_or("N/A".into());
     let bl = r("backlight_timeout");
     let bc = r("battery_calibration");
     let btl = r("battery_limiter");
     let ba = r("boot_animation_sound");
-    let fs = r("fan_speed");
+    let fan = r("fan_speed");
     let lcd = r("lcd_override");
     let usb = r("usb_charging");
+
+    let thermal_opts: Vec<CtrlOpt> = if choices.is_empty() {
+        vec![co("N/A", "No profiles")]
+    } else {
+        choices
+            .iter()
+            .map(|c| {
+                let l = match c.as_str() {
+                    "quiet" => "Quiet",
+                    "balanced" => "Balanced",
+                    "performance" => "Performance",
+                    "low-power" => "Low-Power",
+                    other => other,
+                };
+                co(c, l)
+            })
+            .collect()
+    };
 
     vec![
         Setting {
             id: Sid::Thermal,
             label: "Thermal Profile",
             desc: "Controls CPU/GPU power and thermal behavior",
-            hint: if choices.is_empty() {
-                "No profiles detected".into()
-            } else {
-                format!("Options: {}", choices.join(" | "))
+            display: match tp.as_str() {
+                "quiet" => "Quiet".into(),
+                "balanced" => "Balanced".into(),
+                "performance" => "Performance".into(),
+                o => o.into(),
             },
-            display: tp.clone(),
+            kind: SettingKind::Cycle(thermal_opts),
+            pending: None,
             raw: tp,
         },
         Setting {
             id: Sid::Backlight,
             label: "Backlight Timeout",
-            desc: "Turns off keyboard RGB after 30 seconds of idle",
-            hint: "Toggle: 0 (Off) | 1 (On)".into(),
+            desc: "Turns off keyboard RGB after 30s idle",
             display: on_off(&bl),
+            kind: SettingKind::Toggle,
+            pending: None,
             raw: bl,
         },
         Setting {
             id: Sid::BatCal,
             label: "Battery Calibration",
-            desc: "Calibrates battery for accurate readings — keep AC plugged in!",
-            hint: "Toggle: 0 (Stop) | 1 (Start calibration)".into(),
+            desc: "Calibrate battery — keep AC plugged in during calibration!",
             display: match bc.as_str() {
                 "1" => "Running".into(),
                 "0" => "Stopped".into(),
                 o => o.into(),
             },
+            kind: SettingKind::Toggle,
+            pending: None,
             raw: bc,
         },
         Setting {
             id: Sid::BatLim,
             label: "Battery Limiter",
-            desc: "Limits charging to 80% to preserve battery health",
-            hint: "Toggle: 0 (Off) | 1 (Limit to 80%)".into(),
+            desc: "Limits charging to 80% for battery longevity",
             display: match btl.as_str() {
                 "1" => "80% Limit".into(),
                 "0" => "Disabled".into(),
                 o => o.into(),
             },
+            kind: SettingKind::Toggle,
+            pending: None,
             raw: btl,
         },
         Setting {
             id: Sid::BootAnim,
             label: "Boot Animation",
-            desc: "Enables or disables custom boot animation and sound",
-            hint: "Toggle: 0 (Off) | 1 (On)".into(),
+            desc: "Custom boot animation and sound on startup",
             display: on_off(&ba),
+            kind: SettingKind::Toggle,
+            pending: None,
             raw: ba,
         },
         Setting {
             id: Sid::Fan,
             label: "Fan Speed",
-            desc: "CPU and GPU fan speeds (0 = Auto, 1-100 = manual %)",
-            hint: "Format: CPU,GPU  e.g. 50,70  |  0,0 for Auto".into(),
-            display: if fs == "0,0" || fs == "0" {
+            desc: "CPU and GPU fan speed control",
+            display: if fan == "0,0" || fan == "0" {
                 "Auto".into()
             } else {
-                fs.clone()
+                format!("CPU/GPU: {fan}")
             },
-            raw: fs,
+            kind: SettingKind::Cycle(vec![
+                co("0,0", "Auto"),
+                co("30,30", "Low (30%)"),
+                co("50,50", "Medium (50%)"),
+                co("70,70", "High (70%)"),
+                co("100,100", "Max (100%)"),
+            ]),
+            pending: None,
+            raw: fan,
         },
         Setting {
             id: Sid::Lcd,
             label: "LCD Override",
             desc: "Reduces LCD latency and minimizes ghosting",
-            hint: "Toggle: 0 (Off) | 1 (On)".into(),
             display: on_off(&lcd),
+            kind: SettingKind::Toggle,
+            pending: None,
             raw: lcd,
         },
         Setting {
             id: Sid::Usb,
             label: "USB Charging",
             desc: "Powers USB port when laptop is off until battery threshold",
-            hint: "Values: 0 (Off) | 10 | 20 | 30 (% threshold)".into(),
             display: match usb.as_str() {
                 "0" => "Disabled".into(),
                 "10" => "Until 10%".into(),
@@ -264,47 +661,16 @@ fn load_settings(choices: &[String]) -> Vec<Setting> {
                 "30" => "Until 30%".into(),
                 o => o.into(),
             },
+            kind: SettingKind::Cycle(vec![
+                co("0", "Off"),
+                co("10", "Until 10%"),
+                co("20", "Until 20%"),
+                co("30", "Until 30%"),
+            ]),
+            pending: None,
             raw: usb,
         },
     ]
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  Validation & Writing
-// ═══════════════════════════════════════════════════════════════════════════════
-
-fn validate(id: &Sid, v: &str, choices: &[String]) -> Result<String, String> {
-    let v = v.trim();
-    match id {
-        Sid::Thermal => {
-            if choices.iter().any(|c| c == v) {
-                Ok(v.into())
-            } else {
-                Err(format!("Choose from: {}", choices.join(", ")))
-            }
-        }
-        Sid::Backlight | Sid::BatCal | Sid::BatLim | Sid::BootAnim | Sid::Lcd => match v {
-            "0" | "1" => Ok(v.into()),
-            _ => Err("Must be 0 or 1".into()),
-        },
-        Sid::Fan => {
-            let p: Vec<&str> = v.split(',').collect();
-            if p.len() != 2 {
-                return Err("Format: CPU,GPU (e.g. 50,70)".into());
-            }
-            for x in &p {
-                match x.trim().parse::<u32>() {
-                    Ok(n) if n <= 100 => {}
-                    _ => return Err("Each value must be 0-100".into()),
-                }
-            }
-            Ok(format!("{},{}", p[0].trim(), p[1].trim()))
-        }
-        Sid::Usb => match v {
-            "0" | "10" | "20" | "30" => Ok(v.into()),
-            _ => Err("Must be 0, 10, 20, or 30".into()),
-        },
-    }
 }
 
 fn write_setting(id: &Sid, v: &str) -> Result<()> {
@@ -320,17 +686,111 @@ fn write_setting(id: &Sid, v: &str) -> Result<()> {
     }
 }
 
-/// Returns true for settings that can be toggled with a single keypress.
-fn is_toggle(id: &Sid) -> bool {
-    matches!(
-        id,
-        Sid::Backlight | Sid::BatCal | Sid::BatLim | Sid::BootAnim | Sid::Lcd
-    )
+// ═══════════════════════════════════════════════════════════════════════════════
+//  RGB State
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const RGB_PARAM_COUNT: usize = 5; // effect, color, brightness, speed, direction
+
+struct RgbState {
+    effect_idx: usize,
+    color_idx: usize,
+    brightness: u8, // 0-100 %
+    speed: u8,      // 0-100 % (100 = fastest)
+    dir_idx: usize,
+    sel: usize, // selected parameter row (0..4)
+    kb_found: bool,
+}
+
+impl RgbState {
+    fn from_config(cfg: &RgbConfig) -> Self {
+        Self {
+            effect_idx: cfg.effect.min(EFFECTS.len() - 1),
+            color_idx: cfg.color.min(COLOR_PALETTE.len() - 1),
+            brightness: cfg.brightness.min(100),
+            speed: cfg.speed.min(100),
+            dir_idx: cfg.direction.min(DIRECTIONS.len() - 1),
+            sel: 0,
+            kb_found: is_kb_present(),
+        }
+    }
+
+    fn to_config(&self) -> RgbConfig {
+        RgbConfig {
+            effect: self.effect_idx,
+            color: self.color_idx,
+            brightness: self.brightness,
+            speed: self.speed,
+            direction: self.dir_idx,
+        }
+    }
+
+    fn eff(&self) -> &'static EffectDef {
+        &EFFECTS[self.effect_idx]
+    }
+
+    fn color_name(&self) -> &'static str {
+        COLOR_PALETTE[self.color_idx].0
+    }
+
+    fn color_rgb(&self) -> Rgb {
+        COLOR_PALETTE[self.color_idx].1
+    }
+
+    fn dir_name(&self) -> &'static str {
+        DIRECTIONS[self.dir_idx]
+    }
+
+    fn cycle_left(&mut self) {
+        match self.sel {
+            0 => {
+                self.effect_idx = if self.effect_idx > 0 {
+                    self.effect_idx - 1
+                } else {
+                    EFFECTS.len() - 1
+                }
+            }
+            1 => {
+                self.color_idx = if self.color_idx > 0 {
+                    self.color_idx - 1
+                } else {
+                    COLOR_PALETTE.len() - 1
+                }
+            }
+            2 => self.brightness = self.brightness.saturating_sub(10),
+            3 => self.speed = self.speed.saturating_sub(10),
+            4 => {
+                self.dir_idx = if self.dir_idx > 0 {
+                    self.dir_idx - 1
+                } else {
+                    DIRECTIONS.len() - 1
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn cycle_right(&mut self) {
+        match self.sel {
+            0 => self.effect_idx = (self.effect_idx + 1) % EFFECTS.len(),
+            1 => self.color_idx = (self.color_idx + 1) % COLOR_PALETTE.len(),
+            2 => self.brightness = (self.brightness + 10).min(100),
+            3 => self.speed = (self.speed + 10).min(100),
+            4 => self.dir_idx = (self.dir_idx + 1) % DIRECTIONS.len(),
+            _ => {}
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Application State
 // ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(PartialEq, Clone, Copy)]
+enum Tab {
+    System,
+    Rgb,
+}
 
 struct Sensors {
     cpu_t: Option<f64>,
@@ -339,24 +799,19 @@ struct Sensors {
     gpu_f: Option<u32>,
 }
 
-#[derive(PartialEq)]
-enum Mode {
-    Normal,
-    Edit,
-}
-
 struct App {
+    tab: Tab,
     sensors: Sensors,
     settings: Vec<Setting>,
     choices: Vec<String>,
-    sel: usize,
-    mode: Mode,
-    input: String,
-    curs: usize,
+    ctrl_sel: usize,
+    rgb: RgbState,
+    config: AppConfig,
     status: String,
     err: bool,
     quit: bool,
     module_ok: bool,
+    tick_n: u64,
 }
 
 impl App {
@@ -364,8 +819,11 @@ impl App {
         let choices = thermal_choices();
         let (cf, gf) = fan_speeds();
         let module_ok = std::path::Path::new(PS_BASE).exists();
+        let config = AppConfig::load();
+        let rgb = RgbState::from_config(&config.rgb);
 
         Self {
+            tab: Tab::System,
             sensors: Sensors {
                 cpu_t: cpu_temp(),
                 gpu_t: gpu_temp(),
@@ -374,191 +832,285 @@ impl App {
             },
             settings: load_settings(&choices),
             choices,
-            sel: 0,
-            mode: Mode::Normal,
-            input: String::new(),
-            curs: 0,
+            ctrl_sel: 0,
+            rgb,
+            config,
             status: if module_ok {
-                "Ready — run as root for write access".into()
+                "Ready — F1: System  F2: Keyboard RGB  Tab: Switch".into()
             } else {
-                "linuwu_sense module not loaded — settings unavailable".into()
+                "⚠ linuwu_sense module not loaded".into()
             },
             err: !module_ok,
             quit: false,
             module_ok,
+            tick_n: 0,
         }
     }
 
-    /// Refresh sensor data and settings from sysfs.
     fn tick(&mut self) {
         self.sensors.cpu_t = cpu_temp();
         self.sensors.gpu_t = gpu_temp();
         let (cf, gf) = fan_speeds();
         self.sensors.cpu_f = cf;
         self.sensors.gpu_f = gf;
-        // Only refresh settings in normal mode to avoid clobbering edit state
-        if self.mode == Mode::Normal {
+        self.tick_n += 1;
+
+        // Re-check keyboard presence every 5 seconds
+        if self.tick_n.is_multiple_of(5) {
+            self.rgb.kb_found = is_kb_present();
+        }
+
+        // Refresh settings only when no pending cycle preview
+        if self.tab == Tab::System && !self.settings.iter().any(|s| s.pending.is_some()) {
             self.settings = load_settings(&self.choices);
         }
     }
 
-    /// Toggle a boolean setting directly.
-    fn do_toggle(&mut self) {
-        let id = self.settings[self.sel].id.clone();
-        let name = self.settings[self.sel].label;
-        let raw = self.settings[self.sel].raw.clone();
-        let new = if raw == "1" { "0" } else { "1" };
+    // ─── Key Handling ───────────────────────────────────────────────────────
 
-        match write_setting(&id, new) {
-            Ok(()) => {
-                self.status = format!(
-                    "  {name} -> {}",
-                    if new == "1" { "Enabled" } else { "Disabled" }
-                );
-                self.err = false;
-                self.settings = load_settings(&self.choices);
-            }
-            Err(e) => {
-                self.status = format!("  {e}");
-                self.err = true;
-            }
-        }
-    }
-
-    /// Enter edit mode, or toggle if the setting is boolean.
-    fn enter_edit(&mut self) {
-        if self.settings.is_empty() {
-            return;
-        }
-        let id = self.settings[self.sel].id.clone();
-
-        if is_toggle(&id) {
-            self.do_toggle();
-            return;
-        }
-
-        // Enter text edit mode
-        self.input = self.settings[self.sel].raw.clone();
-        self.curs = self.input.len();
-        self.mode = Mode::Edit;
-        self.status = format!(
-            "Editing {} — Enter to confirm, Esc to cancel",
-            self.settings[self.sel].label
-        );
-        self.err = false;
-    }
-
-    /// Confirm the edit and write the value.
-    fn confirm(&mut self) {
-        if self.settings.is_empty() {
-            return;
-        }
-        let id = self.settings[self.sel].id.clone();
-        let name = self.settings[self.sel].label;
-
-        match validate(&id, &self.input, &self.choices) {
-            Ok(v) => match write_setting(&id, &v) {
-                Ok(()) => {
-                    self.status = format!("  {name} updated -> {v}");
-                    self.err = false;
-                    self.settings = load_settings(&self.choices);
-                }
-                Err(e) => {
-                    self.status = format!("  Write failed: {e}");
-                    self.err = true;
-                }
-            },
-            Err(e) => {
-                self.status = format!("  Invalid: {e}");
-                self.err = true;
-                return; // stay in edit mode
-            }
-        }
-        self.mode = Mode::Normal;
-        self.input.clear();
-        self.curs = 0;
-    }
-
-    /// Cancel editing, return to normal mode.
-    fn cancel(&mut self) {
-        self.mode = Mode::Normal;
-        self.input.clear();
-        self.curs = 0;
-        self.status = "Cancelled".into();
-        self.err = false;
-    }
-
-    /// Handle a key event.
     fn on_key(&mut self, k: KeyEvent) {
-        // Ctrl+C always quits
         if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
             self.quit = true;
             return;
         }
 
-        match self.mode {
-            Mode::Normal => match k.code {
-                KeyCode::Char('q') | KeyCode::Char('Q') => self.quit = true,
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if self.sel > 0 {
-                        self.sel -= 1;
-                    }
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    if self.sel + 1 < self.settings.len() {
-                        self.sel += 1;
-                    }
-                }
-                KeyCode::Home | KeyCode::Char('g') => self.sel = 0,
-                KeyCode::End | KeyCode::Char('G') => {
-                    if !self.settings.is_empty() {
-                        self.sel = self.settings.len() - 1;
-                    }
-                }
-                KeyCode::Enter | KeyCode::Char(' ') => self.enter_edit(),
-                KeyCode::Char('r') | KeyCode::Char('R') => {
-                    self.tick();
-                    self.status = "  Refreshed".into();
-                    self.err = false;
-                }
-                _ => {}
-            },
-            Mode::Edit => match k.code {
-                KeyCode::Esc => self.cancel(),
-                KeyCode::Enter => self.confirm(),
-                KeyCode::Backspace => {
-                    if self.curs > 0 {
-                        self.input.remove(self.curs - 1);
-                        self.curs -= 1;
-                    }
-                }
-                KeyCode::Delete => {
-                    if self.curs < self.input.len() {
-                        self.input.remove(self.curs);
-                    }
-                }
-                KeyCode::Left => {
-                    if self.curs > 0 {
-                        self.curs -= 1;
-                    }
-                }
-                KeyCode::Right => {
-                    if self.curs < self.input.len() {
-                        self.curs += 1;
-                    }
-                }
-                KeyCode::Home => self.curs = 0,
-                KeyCode::End => self.curs = self.input.len(),
-                KeyCode::Char(c) => {
-                    self.input.insert(self.curs, c);
-                    self.curs += 1;
-                }
-                _ => {}
-            },
+        match k.code {
+            KeyCode::F(1) => {
+                self.tab = Tab::System;
+                return;
+            }
+            KeyCode::F(2) => {
+                self.tab = Tab::Rgb;
+                return;
+            }
+            KeyCode::Tab | KeyCode::BackTab => {
+                self.tab = if self.tab == Tab::System {
+                    Tab::Rgb
+                } else {
+                    Tab::System
+                };
+                return;
+            }
+            KeyCode::Char('q') | KeyCode::Char('Q') => {
+                self.quit = true;
+                return;
+            }
+            _ => {}
+        }
+
+        match self.tab {
+            Tab::System => self.on_key_system(k),
+            Tab::Rgb => self.on_key_rgb(k),
         }
     }
 
-    /// Main event loop.
+    fn on_key_system(&mut self, k: KeyEvent) {
+        let len = self.settings.len();
+        if len == 0 {
+            return;
+        }
+
+        match k.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                // Clear pending on navigation
+                self.settings[self.ctrl_sel].pending = None;
+                self.ctrl_sel = if self.ctrl_sel > 0 {
+                    self.ctrl_sel - 1
+                } else {
+                    len - 1
+                };
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.settings[self.ctrl_sel].pending = None;
+                self.ctrl_sel = (self.ctrl_sel + 1) % len;
+            }
+            KeyCode::Left | KeyCode::Char('h') => self.cycle_setting_left(),
+            KeyCode::Right | KeyCode::Char('l') => self.cycle_setting_right(),
+            KeyCode::Enter | KeyCode::Char(' ') => self.confirm_setting(),
+            KeyCode::Esc => {
+                self.settings[self.ctrl_sel].pending = None;
+                self.status = "Cancelled".into();
+                self.err = false;
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                self.settings = load_settings(&self.choices);
+                self.tick();
+                self.status = "  ✓ Refreshed".into();
+                self.err = false;
+            }
+            _ => {}
+        }
+    }
+
+    fn cycle_setting_left(&mut self) {
+        let idx = self.ctrl_sel;
+        let raw = self.settings[idx].raw.clone();
+        let info = if let SettingKind::Cycle(ref opts) = self.settings[idx].kind {
+            if opts.is_empty() {
+                return;
+            }
+            let cur = self.settings[idx]
+                .pending
+                .unwrap_or_else(|| opts.iter().position(|o| o.value == raw).unwrap_or(0));
+            let nxt = if cur > 0 { cur - 1 } else { opts.len() - 1 };
+            Some((nxt, opts[nxt].label.clone()))
+        } else {
+            None
+        };
+        if let Some((nxt, label)) = info {
+            self.settings[idx].pending = Some(nxt);
+            self.status = format!("  ◀ {label} — Enter to confirm");
+            self.err = false;
+        }
+    }
+
+    fn cycle_setting_right(&mut self) {
+        let idx = self.ctrl_sel;
+        let raw = self.settings[idx].raw.clone();
+        let info = if let SettingKind::Cycle(ref opts) = self.settings[idx].kind {
+            if opts.is_empty() {
+                return;
+            }
+            let cur = self.settings[idx]
+                .pending
+                .unwrap_or_else(|| opts.iter().position(|o| o.value == raw).unwrap_or(0));
+            let nxt = (cur + 1) % opts.len();
+            Some((nxt, opts[nxt].label.clone()))
+        } else {
+            None
+        };
+        if let Some((nxt, label)) = info {
+            self.settings[idx].pending = Some(nxt);
+            self.status = format!("  ▶ {label} — Enter to confirm");
+            self.err = false;
+        }
+    }
+
+    fn confirm_setting(&mut self) {
+        let idx = self.ctrl_sel;
+        let id = self.settings[idx].id.clone();
+        let name = self.settings[idx].label;
+        let raw = self.settings[idx].raw.clone();
+        let is_toggle = matches!(self.settings[idx].kind, SettingKind::Toggle);
+
+        if is_toggle {
+            let new_val = if raw == "1" { "0" } else { "1" };
+            match write_setting(&id, new_val) {
+                Ok(()) => {
+                    self.status = format!(
+                        "  ✓ {name} → {}",
+                        if new_val == "1" {
+                            "Enabled"
+                        } else {
+                            "Disabled"
+                        }
+                    );
+                    self.err = false;
+                    self.settings = load_settings(&self.choices);
+                }
+                Err(e) => {
+                    self.status = format!("  ✗ {e}");
+                    self.err = true;
+                }
+            }
+            return;
+        }
+
+        // Cycle setting
+        let pending = self.settings[idx].pending;
+        if let Some(pidx) = pending {
+            let write_info = if let SettingKind::Cycle(ref opts) = self.settings[idx].kind {
+                opts.get(pidx).map(|o| (o.value.clone(), o.label.clone()))
+            } else {
+                None
+            };
+            if let Some((val, label)) = write_info {
+                match write_setting(&id, &val) {
+                    Ok(()) => {
+                        self.status = format!("  ✓ {name} → {label}");
+                        self.err = false;
+                        self.settings = load_settings(&self.choices);
+                    }
+                    Err(e) => {
+                        self.status = format!("  ✗ {e}");
+                        self.err = true;
+                    }
+                }
+            }
+        } else {
+            // No pending yet: advance to next option as preview
+            let info = if let SettingKind::Cycle(ref opts) = self.settings[idx].kind {
+                if opts.is_empty() {
+                    return;
+                }
+                let cur = opts.iter().position(|o| o.value == raw).unwrap_or(0);
+                let nxt = (cur + 1) % opts.len();
+                Some((nxt, opts[nxt].label.clone()))
+            } else {
+                None
+            };
+            if let Some((nxt, label)) = info {
+                self.settings[idx].pending = Some(nxt);
+                self.status = format!("  ▶ {label} — Enter again to confirm, ←→ to browse");
+                self.err = false;
+            }
+        }
+    }
+
+    // ─── RGB Key Handling ───────────────────────────────────────────────────
+
+    fn on_key_rgb(&mut self, k: KeyEvent) {
+        match k.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.rgb.sel = if self.rgb.sel > 0 {
+                    self.rgb.sel - 1
+                } else {
+                    RGB_PARAM_COUNT - 1
+                };
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.rgb.sel = (self.rgb.sel + 1) % RGB_PARAM_COUNT;
+            }
+            KeyCode::Left | KeyCode::Char('h') => self.rgb.cycle_left(),
+            KeyCode::Right | KeyCode::Char('l') => self.rgb.cycle_right(),
+            KeyCode::Enter | KeyCode::Char(' ') => self.apply_rgb(),
+            KeyCode::Char('s') | KeyCode::Char('S') => self.save_rgb(),
+            _ => {}
+        }
+    }
+
+    fn apply_rgb(&mut self) {
+        match send_rgb(&self.rgb) {
+            Ok(msg) => {
+                self.status = format!("  ✓ {msg}");
+                self.err = false;
+                // Auto-save on successful apply
+                self.config.rgb = self.rgb.to_config();
+                let _ = self.config.save();
+            }
+            Err(e) => {
+                self.status = format!("  ✗ RGB: {e}");
+                self.err = true;
+            }
+        }
+    }
+
+    fn save_rgb(&mut self) {
+        self.config.rgb = self.rgb.to_config();
+        match self.config.save() {
+            Ok(()) => {
+                self.status = format!("  ✓ Config saved → {}", config_path().display());
+                self.err = false;
+            }
+            Err(e) => {
+                self.status = format!("  ✗ Save: {e}");
+                self.err = true;
+            }
+        }
+    }
+
+    // ─── Main Loop ──────────────────────────────────────────────────────────
+
     fn run(mut self, mut term: ratatui::DefaultTerminal) -> Result<()> {
         let mut last = Instant::now();
         loop {
@@ -590,22 +1142,34 @@ impl App {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn draw(f: &mut Frame, app: &App) {
-    let [header, body, detail, status] = Layout::vertical([
+    let [header, tab_bar, body, detail, status] = Layout::vertical([
         Constraint::Length(3),
-        Constraint::Min(14),
-        Constraint::Length(7),
+        Constraint::Length(1),
+        Constraint::Min(12),
+        Constraint::Length(6),
         Constraint::Length(3),
     ])
     .areas(f.area());
 
     draw_header(f, header);
+    draw_tab_bar(f, tab_bar, app);
 
     let [left, right] =
-        Layout::horizontal([Constraint::Percentage(42), Constraint::Percentage(58)]).areas(body);
+        Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).areas(body);
 
     draw_sensors(f, left, app);
-    draw_controls(f, right, app);
-    draw_detail(f, detail, app);
+
+    match app.tab {
+        Tab::System => {
+            draw_controls(f, right, app);
+            draw_detail(f, detail, app);
+        }
+        Tab::Rgb => {
+            draw_rgb_panel(f, right, app);
+            draw_rgb_detail(f, detail, app);
+        }
+    }
+
     draw_status(f, status, app);
 }
 
@@ -631,7 +1195,35 @@ fn draw_header(f: &mut Frame, area: Rect) {
     f.render_widget(Paragraph::new(text).block(block), area);
 }
 
-// ─── Sensor Bar Helper ──────────────────────────────────────────────────────
+// ─── Tab Bar ────────────────────────────────────────────────────────────────
+
+fn draw_tab_bar(f: &mut Frame, area: Rect, app: &App) {
+    let sys = if app.tab == Tab::System {
+        Style::new().fg(Color::Black).bg(Theme::ACCENT).bold()
+    } else {
+        Style::new().fg(Theme::FG_DIM)
+    };
+    let rgb = if app.tab == Tab::Rgb {
+        Style::new().fg(Color::Black).bg(Theme::ACCENT).bold()
+    } else {
+        Style::new().fg(Theme::FG_DIM)
+    };
+
+    let line = Line::from(vec![
+        Span::raw("  "),
+        Span::styled(" F1 System ", sys),
+        Span::raw("  "),
+        Span::styled(" F2 Keyboard RGB ", rgb),
+        Span::styled(
+            "                              Tab to switch",
+            Style::new().fg(Theme::DARK),
+        ),
+    ]);
+
+    f.render_widget(Paragraph::new(line), area);
+}
+
+// ─── Sensor Bars ────────────────────────────────────────────────────────────
 
 fn make_bar(val: f64, max: f64, w: u16) -> Line<'static> {
     let ratio = (val / max).clamp(0.0, 1.0);
@@ -664,45 +1256,41 @@ fn draw_sensors(f: &mut Frame, area: Rect, app: &App) {
 
     let inner = block.inner(area);
     f.render_widget(block, area);
-
     let bar_w = inner.width.saturating_sub(4);
 
-    let sensor_line = |label: &str, val_str: String, color: Color| -> Line<'static> {
+    let sl = |label: &str, val: String, color: Color| -> Line<'static> {
         Line::from(vec![
-            Span::styled(format!("  {:<20}", label), Style::new().fg(Theme::FG)),
-            Span::styled(val_str, Style::new().fg(color).bold()),
+            Span::styled(format!("  {:<18}", label), Style::new().fg(Theme::FG)),
+            Span::styled(val, Style::new().fg(color).bold()),
         ])
     };
 
-    // CPU Temp
     let cpu_t = app.sensors.cpu_t.unwrap_or(0.0);
-    let cpu_str = app
+    let cpu_s = app
         .sensors
         .cpu_t
         .map(|t| format!("{t:.0}°C"))
-        .unwrap_or_else(|| "N/A".into());
+        .unwrap_or("N/A".into());
     let cpu_c = app
         .sensors
         .cpu_t
         .map(Theme::temp_color)
         .unwrap_or(Theme::FG_DIM);
 
-    // GPU Temp
     let gpu_t = app.sensors.gpu_t.unwrap_or(0.0);
-    let gpu_str = app
+    let gpu_s = app
         .sensors
         .gpu_t
         .map(|t| format!("{t:.0}°C"))
-        .unwrap_or_else(|| "N/A".into());
+        .unwrap_or("N/A".into());
     let gpu_c = app
         .sensors
         .gpu_t
         .map(Theme::temp_color)
         .unwrap_or(Theme::FG_DIM);
 
-    // CPU Fan
-    let cpu_f = app.sensors.cpu_f.unwrap_or(0);
-    let cpu_f_str = app
+    let cf = app.sensors.cpu_f.unwrap_or(0);
+    let cf_s = app
         .sensors
         .cpu_f
         .map(|p| {
@@ -712,16 +1300,15 @@ fn draw_sensors(f: &mut Frame, area: Rect, app: &App) {
                 format!("{p}%")
             }
         })
-        .unwrap_or_else(|| "N/A".into());
-    let cpu_fc = app
+        .unwrap_or("N/A".into());
+    let cf_c = app
         .sensors
         .cpu_f
         .map(Theme::fan_color)
         .unwrap_or(Theme::FG_DIM);
 
-    // GPU Fan
-    let gpu_f = app.sensors.gpu_f.unwrap_or(0);
-    let gpu_f_str = app
+    let gf = app.sensors.gpu_f.unwrap_or(0);
+    let gf_s = app
         .sensors
         .gpu_f
         .map(|p| {
@@ -731,25 +1318,25 @@ fn draw_sensors(f: &mut Frame, area: Rect, app: &App) {
                 format!("{p}%")
             }
         })
-        .unwrap_or_else(|| "N/A".into());
-    let gpu_fc = app
+        .unwrap_or("N/A".into());
+    let gf_c = app
         .sensors
         .gpu_f
         .map(Theme::fan_color)
         .unwrap_or(Theme::FG_DIM);
 
     let lines = vec![
-        sensor_line("CPU Temperature", cpu_str, cpu_c),
+        sl("CPU Temperature", cpu_s, cpu_c),
         make_bar(cpu_t, 105.0, bar_w),
         Line::default(),
-        sensor_line("GPU Temperature", gpu_str, gpu_c),
+        sl("GPU Temperature", gpu_s, gpu_c),
         make_bar(gpu_t, 105.0, bar_w),
         Line::default(),
-        sensor_line("CPU Fan", cpu_f_str, cpu_fc),
-        make_bar(cpu_f as f64, 100.0, bar_w),
+        sl("CPU Fan", cf_s, cf_c),
+        make_bar(cf as f64, 100.0, bar_w),
         Line::default(),
-        sensor_line("GPU Fan", gpu_f_str, gpu_fc),
-        make_bar(gpu_f as f64, 100.0, bar_w),
+        sl("GPU Fan", gf_s, gf_c),
+        make_bar(gf as f64, 100.0, bar_w),
     ];
 
     f.render_widget(Paragraph::new(lines), inner);
@@ -770,59 +1357,221 @@ fn draw_controls(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(block, area);
 
     if app.settings.is_empty() {
-        let msg = Paragraph::new("No settings available")
-            .style(Style::new().fg(Theme::FG_DIM))
-            .centered();
-        f.render_widget(msg, inner);
+        f.render_widget(
+            Paragraph::new("No settings available")
+                .style(Style::new().fg(Theme::FG_DIM))
+                .centered(),
+            inner,
+        );
         return;
     }
 
-    let name_w: u16 = 22;
     let rows: Vec<Row> = app
         .settings
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            let sel = i == app.sel;
-            let arrow = if sel { " > " } else { "   " };
+            let sel = i == app.ctrl_sel;
+            let arrow = if sel { " ▸ " } else { "   " };
             let style = if sel {
                 Style::new().fg(Theme::ACCENT).bg(Theme::BG_HL).bold()
             } else {
                 Style::new().fg(Theme::FG)
             };
-            let val_style = if sel {
+
+            // Show pending preview if cycling, else show current
+            let disp = if let Some(pidx) = s.pending {
+                if let SettingKind::Cycle(ref opts) = s.kind {
+                    opts.get(pidx)
+                        .map(|o| format!("◀ {} ▶", o.label))
+                        .unwrap_or(s.display.clone())
+                } else {
+                    s.display.clone()
+                }
+            } else {
+                s.display.clone()
+            };
+
+            let val_style = if sel && s.pending.is_some() {
+                Style::new().fg(Theme::WARM).bg(Theme::BG_HL).bold()
+            } else if sel {
                 Style::new().fg(Theme::ACCENT2).bg(Theme::BG_HL).bold()
             } else {
                 Style::new().fg(Theme::DIM)
             };
 
-            let toggle_hint = if is_toggle(&s.id) && s.raw != "N/A" {
-                if sel { " [toggle]" } else { "" }
-            } else {
-                ""
+            let hint = match (&s.kind, sel) {
+                (SettingKind::Toggle, true) => " [Enter]",
+                (SettingKind::Cycle(_), true) if s.pending.is_some() => " [Enter]",
+                (SettingKind::Cycle(_), true) => " [←→]",
+                _ => "",
             };
 
             Row::new(vec![
                 Cell::new(arrow).style(style),
-                Cell::new(format!("{:<w$}", s.label, w = name_w as usize)).style(style),
-                Cell::new(s.display.clone()).style(val_style),
-                Cell::new(toggle_hint).style(Style::new().fg(Theme::FG_DIM)),
+                Cell::new(format!("{:<20}", s.label)).style(style),
+                Cell::new(disp).style(val_style),
+                Cell::new(hint).style(Style::new().fg(Theme::FG_DIM)),
             ])
         })
         .collect();
 
     let widths = [
         Constraint::Length(3),
-        Constraint::Length(name_w + 1),
-        Constraint::Min(10),
+        Constraint::Length(21),
+        Constraint::Min(14),
         Constraint::Length(9),
     ];
 
-    let table = Table::new(rows, widths).column_spacing(0);
-    f.render_widget(table, inner);
+    f.render_widget(Table::new(rows, widths).column_spacing(0), inner);
 }
 
-// ─── Detail Panel ───────────────────────────────────────────────────────────
+// ─── RGB Panel ──────────────────────────────────────────────────────────────
+
+fn draw_rgb_panel(f: &mut Frame, area: Rect, app: &App) {
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(Theme::DIM))
+        .title(Span::styled(
+            " Keyboard RGB ",
+            Style::new().fg(Theme::ACCENT).bold(),
+        ));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if !app.rgb.kb_found {
+        let msg = vec![
+            Line::default(),
+            Line::from(Span::styled(
+                "  ⚠ No compatible keyboard detected",
+                Style::new().fg(Theme::WARM),
+            )),
+            Line::from(Span::styled(
+                "    Expected: Acer Predator PH16-71 (04F2:0117)",
+                Style::new().fg(Theme::FG_DIM),
+            )),
+            Line::default(),
+            Line::from(Span::styled(
+                "    Config can still be edited & saved.",
+                Style::new().fg(Theme::DIM),
+            )),
+            Line::from(Span::styled(
+                "    Keyboard will be detected when plugged in.",
+                Style::new().fg(Theme::DIM),
+            )),
+        ];
+        f.render_widget(Paragraph::new(msg), inner);
+        return;
+    }
+
+    let eff = app.rgb.eff();
+    let bar_w: usize = 20;
+
+    let mk_row = |idx: usize, label: &str, spans: Vec<Span<'static>>| -> Vec<Line<'static>> {
+        let sel = idx == app.rgb.sel;
+        let arr = if sel { " ▸ " } else { "   " };
+        let ls = if sel {
+            Style::new().fg(Theme::ACCENT).bold()
+        } else {
+            Style::new().fg(Theme::FG)
+        };
+        let mut all = vec![
+            Span::styled(String::from(arr), ls),
+            Span::styled(format!("{:<14}", label), ls),
+        ];
+        all.extend(spans);
+        vec![Line::from(all)]
+    };
+
+    // Effect
+    let effect_spans = vec![
+        Span::styled("◀ ", Style::new().fg(Theme::DIM)),
+        Span::styled(
+            String::from(eff.name),
+            Style::new().fg(Theme::ACCENT2).bold(),
+        ),
+        Span::styled(" ▶", Style::new().fg(Theme::DIM)),
+    ];
+
+    // Color
+    let c = app.rgb.color_rgb();
+    let cn = app.rgb.color_name();
+    let color_spans = if eff.has_color {
+        let swatch = if app.rgb.color_idx == RANDOM_COLOR_IDX {
+            Span::styled(" ◆◆◆ ", Style::new().fg(Theme::ACCENT))
+        } else {
+            Span::styled(" ███ ", Style::new().fg(Color::Rgb(c.r, c.g, c.b)))
+        };
+        vec![
+            Span::styled("◀ ", Style::new().fg(Theme::DIM)),
+            Span::styled(String::from(cn), Style::new().fg(Theme::ACCENT2).bold()),
+            Span::styled(" ▶ ", Style::new().fg(Theme::DIM)),
+            swatch,
+        ]
+    } else {
+        vec![Span::styled(
+            "  N/A (effect has no color)",
+            Style::new().fg(Theme::DARK),
+        )]
+    };
+
+    // Brightness bar
+    let bf = (app.rgb.brightness as usize * bar_w / 100).min(bar_w);
+    let be = bar_w.saturating_sub(bf);
+    let bright_spans = vec![
+        Span::styled("━".repeat(bf), Style::new().fg(Theme::ACCENT)),
+        Span::styled("─".repeat(be), Style::new().fg(Theme::DARK)),
+        Span::styled(
+            format!(" {}%", app.rgb.brightness),
+            Style::new().fg(Theme::FG).bold(),
+        ),
+    ];
+
+    // Speed bar
+    let sf = (app.rgb.speed as usize * bar_w / 100).min(bar_w);
+    let se = bar_w.saturating_sub(sf);
+    let speed_spans = vec![
+        Span::styled("━".repeat(sf), Style::new().fg(Theme::ACCENT)),
+        Span::styled("─".repeat(se), Style::new().fg(Theme::DARK)),
+        Span::styled(
+            format!(" {}%", app.rgb.speed),
+            Style::new().fg(Theme::FG).bold(),
+        ),
+    ];
+
+    // Direction
+    let dir_spans = if eff.has_dir {
+        vec![
+            Span::styled("◀ ", Style::new().fg(Theme::DIM)),
+            Span::styled(
+                String::from(app.rgb.dir_name()),
+                Style::new().fg(Theme::ACCENT2).bold(),
+            ),
+            Span::styled(" ▶", Style::new().fg(Theme::DIM)),
+        ]
+    } else {
+        vec![Span::styled(
+            "  N/A (Wave only)",
+            Style::new().fg(Theme::DARK),
+        )]
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.extend(mk_row(0, "Effect", effect_spans));
+    lines.push(Line::default());
+    lines.extend(mk_row(1, "Color", color_spans));
+    lines.push(Line::default());
+    lines.extend(mk_row(2, "Brightness", bright_spans));
+    lines.push(Line::default());
+    lines.extend(mk_row(3, "Speed", speed_spans));
+    lines.push(Line::default());
+    lines.extend(mk_row(4, "Direction", dir_spans));
+
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+// ─── Detail Panel (System Tab) ──────────────────────────────────────────────
 
 fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
     if app.settings.is_empty() {
@@ -833,105 +1582,181 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
                 " Details ",
                 Style::new().fg(Theme::ACCENT).bold(),
             ));
-        f.render_widget(Paragraph::new("No settings loaded").block(block), area);
+        f.render_widget(Paragraph::new("  No settings loaded").block(block), area);
         return;
     }
 
-    let s = &app.settings[app.sel];
-
-    let (title, content, border_color) = match app.mode {
-        Mode::Normal => {
-            let title = format!(" {} ", s.label);
-            let content = vec![
-                Line::from(vec![
-                    Span::styled("  Current: ", Style::new().fg(Theme::FG_DIM)),
-                    Span::styled(s.display.clone(), Style::new().fg(Theme::ACCENT).bold()),
-                    Span::styled("  |  Raw: ", Style::new().fg(Theme::FG_DIM)),
-                    Span::styled(s.raw.clone(), Style::new().fg(Theme::FG)),
-                ]),
-                Line::from(Span::styled(
-                    format!("  {}", s.hint),
-                    Style::new().fg(Theme::FG_DIM),
-                )),
-                Line::default(),
-                Line::from(Span::styled(
-                    format!("  {}", s.desc),
-                    Style::new().fg(Theme::FG).italic(),
-                )),
-                Line::default(),
-            ];
-            (title, content, Theme::DIM)
-        }
-        Mode::Edit => {
-            let title = format!("  Edit: {} ", s.label);
-            let pos = app.curs.min(app.input.len());
-            let before = &app.input[..pos];
-            let after = &app.input[pos..];
-
-            let content = vec![
-                Line::from(Span::styled(
-                    format!("  {}", s.hint),
-                    Style::new().fg(Theme::FG_DIM),
-                )),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("  Value: ", Style::new().fg(Theme::FG_DIM)),
-                    Span::styled(before.to_string(), Style::new().fg(Theme::ACCENT)),
-                    Span::styled("|", Style::new().fg(Theme::ACCENT).bold()),
-                    Span::styled(after.to_string(), Style::new().fg(Theme::ACCENT)),
-                ]),
-                Line::default(),
-                Line::from(Span::styled(
-                    "  Enter -> Confirm  |  Esc -> Cancel",
-                    Style::new().fg(Theme::DIM),
-                )),
-            ];
-            (title, content, Theme::ACCENT)
-        }
+    let s = &app.settings[app.ctrl_sel];
+    let border = if s.pending.is_some() {
+        Theme::WARM
+    } else {
+        Theme::DIM
     };
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(border_color))
-        .title(Span::styled(title, Style::new().fg(Theme::ACCENT).bold()));
+        .border_style(Style::new().fg(border))
+        .title(Span::styled(
+            format!(" {} ", s.label),
+            Style::new().fg(Theme::ACCENT).bold(),
+        ));
 
-    f.render_widget(Paragraph::new(content).block(block), area);
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("  Current: ", Style::new().fg(Theme::FG_DIM)),
+            Span::styled(s.display.clone(), Style::new().fg(Theme::ACCENT).bold()),
+            Span::styled("  │  Raw: ", Style::new().fg(Theme::FG_DIM)),
+            Span::styled(s.raw.clone(), Style::new().fg(Theme::FG)),
+        ]),
+        Line::from(Span::styled(
+            format!("  {}", s.desc),
+            Style::new().fg(Theme::FG).italic(),
+        )),
+    ];
+
+    if let Some(pidx) = s.pending
+        && let SettingKind::Cycle(ref opts) = s.kind
+        && let Some(opt) = opts.get(pidx)
+    {
+        lines.push(Line::from(vec![
+            Span::styled("  Preview: ", Style::new().fg(Theme::WARM)),
+            Span::styled(opt.label.clone(), Style::new().fg(Theme::WARM).bold()),
+            Span::styled("  → Enter to apply", Style::new().fg(Theme::FG_DIM)),
+        ]));
+    }
+
+    let hint = match &s.kind {
+        SettingKind::Toggle => "  Enter: Toggle  │  ↑↓: Navigate".into(),
+        SettingKind::Cycle(opts) => {
+            let names: Vec<&str> = opts.iter().map(|o| o.label.as_str()).collect();
+            format!("  ←→: [{}]  │  Enter: Confirm", names.join(" │ "))
+        }
+    };
+    lines.push(Line::from(Span::styled(hint, Style::new().fg(Theme::DIM))));
+
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+// ─── Detail Panel (RGB Tab) ─────────────────────────────────────────────────
+
+fn draw_rgb_detail(f: &mut Frame, area: Rect, app: &App) {
+    let eff = app.rgb.eff();
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(Theme::DIM))
+        .title(Span::styled(
+            " RGB Details ",
+            Style::new().fg(Theme::ACCENT).bold(),
+        ));
+
+    let desc = match app.rgb.sel {
+        0 => format!(
+            "  {} — {}/{} effects. ←→ to browse.",
+            eff.name,
+            app.rgb.effect_idx + 1,
+            EFFECTS.len()
+        ),
+        1 => format!(
+            "  {} — {}/{} colors. ←→ to cycle.",
+            app.rgb.color_name(),
+            app.rgb.color_idx + 1,
+            COLOR_PALETTE.len()
+        ),
+        2 => format!(
+            "  Brightness {}% — LED intensity. ←→ adjusts ±10%.",
+            app.rgb.brightness
+        ),
+        3 => format!(
+            "  Speed {}% — Animation speed (100 = fastest). ←→ adjusts ±10%.",
+            app.rgb.speed
+        ),
+        4 => format!("  {} — Wave direction. ←→ to cycle.", app.rgb.dir_name()),
+        _ => String::new(),
+    };
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("  Preview: ", Style::new().fg(Theme::FG_DIM)),
+            Span::styled(
+                String::from(eff.name),
+                Style::new().fg(Theme::ACCENT2).bold(),
+            ),
+            if eff.has_color {
+                Span::styled(
+                    format!(" │ {} ", app.rgb.color_name()),
+                    Style::new().fg(Theme::FG),
+                )
+            } else {
+                Span::raw("")
+            },
+            Span::styled(
+                format!("│ B:{}% S:{}%", app.rgb.brightness, app.rgb.speed),
+                Style::new().fg(Theme::FG),
+            ),
+            if eff.has_dir {
+                Span::styled(
+                    format!(" │ Dir:{}", app.rgb.dir_name()),
+                    Style::new().fg(Theme::FG),
+                )
+            } else {
+                Span::raw("")
+            },
+        ]),
+        Line::from(Span::styled(desc, Style::new().fg(Theme::FG_DIM))),
+        Line::default(),
+        Line::from(Span::styled(
+            "  Enter: Apply to keyboard  │  S: Save config  │  ←→: Adjust  │  ↑↓: Param",
+            Style::new().fg(Theme::DIM),
+        )),
+    ];
+
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 // ─── Status Bar ─────────────────────────────────────────────────────────────
 
 fn draw_status(f: &mut Frame, area: Rect, app: &App) {
-    let mode_span = match app.mode {
-        Mode::Normal => Span::styled(
-            " NORMAL ",
+    let tab_span = match app.tab {
+        Tab::System => Span::styled(
+            " SYSTEM ",
             Style::new().fg(Color::Black).bg(Theme::ACCENT).bold(),
         ),
-        Mode::Edit => Span::styled(
-            " EDIT ",
-            Style::new().fg(Color::Black).bg(Theme::WARM).bold(),
+        Tab::Rgb => Span::styled(
+            " RGB ",
+            Style::new()
+                .fg(Color::Black)
+                .bg(Color::Rgb(128, 0, 255))
+                .bold(),
         ),
     };
 
-    let status_color = if app.err { Theme::ERR } else { Theme::FG_DIM };
-
-    let module_indicator = if app.module_ok {
-        Span::styled(" MODULE OK ", Style::new().fg(Theme::COOL).bold())
+    let module_span = if app.module_ok {
+        Span::styled(" MODULE ✓ ", Style::new().fg(Theme::COOL).bold())
     } else {
         Span::styled(" NO MODULE ", Style::new().fg(Theme::ERR).bold())
     };
 
-    let help = match app.mode {
-        Mode::Normal => " up/down Navigate | Enter Edit/Toggle | r Refresh | q Quit ",
-        Mode::Edit => " Type value | Left/Right Cursor | Enter Confirm | Esc Cancel ",
+    let kb_span = if app.rgb.kb_found {
+        Span::styled(" KB ✓ ", Style::new().fg(Theme::COOL).bold())
+    } else {
+        Span::styled(" NO KB ", Style::new().fg(Theme::WARM).bold())
+    };
+
+    let sc = if app.err { Theme::ERR } else { Theme::FG_DIM };
+
+    let help = match app.tab {
+        Tab::System => " F1/F2 Tab │ ↑↓ Navigate │ ←→ Cycle │ Enter Confirm/Toggle │ q Quit ",
+        Tab::Rgb => " F1/F2 Tab │ ↑↓ Param │ ←→ Adjust │ Enter Apply │ S Save │ q Quit ",
     };
 
     let lines = vec![
         Line::from(vec![
-            mode_span,
+            tab_span,
             Span::raw(" "),
-            module_indicator,
+            module_span,
+            kb_span,
             Span::raw(" "),
-            Span::styled(app.status.clone(), Style::new().fg(status_color)),
+            Span::styled(app.status.clone(), Style::new().fg(sc)),
         ]),
         Line::from(Span::styled(help, Style::new().fg(Theme::FG_DIM))),
     ];
@@ -948,8 +1773,57 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+
+    // --help
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        eprintln!("Arch-Sense — Acer Predator Control Center\n");
+        eprintln!("Usage:");
+        eprintln!("  sudo arch-sense            Launch TUI");
+        eprintln!("  sudo arch-sense --apply    Apply saved RGB settings (for boot/systemd)");
+        eprintln!("\nConfig: {}", config_path().display());
+        eprintln!("Systemd: sudo cp arch-sense.service /etc/systemd/system/");
+        eprintln!("         sudo systemctl enable --now arch-sense");
+        return Ok(());
+    }
+
+    // --apply: headless mode for systemd / boot
+    if args.iter().any(|a| a == "--apply") {
+        return apply_saved_config();
+    }
+
+    // Normal TUI mode
     let terminal = ratatui::init();
-    let result = App::new().run(terminal);
+    let app = App::new();
+
+    // Apply saved RGB on startup
+    if app.rgb.kb_found {
+        let _ = send_rgb(&app.rgb);
+    }
+
+    let result = app.run(terminal);
     ratatui::restore();
     result
+}
+
+/// Headless: apply saved RGB config and exit (for systemd service / boot).
+fn apply_saved_config() -> Result<()> {
+    let config = AppConfig::load();
+    let rgb = RgbState::from_config(&config.rgb);
+
+    if !is_kb_present() {
+        eprintln!("arch-sense: Keyboard not found (VID:04F2 PID:0117)");
+        std::process::exit(0);
+    }
+
+    match send_rgb(&rgb) {
+        Ok(msg) => {
+            eprintln!("arch-sense: {msg}");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("arch-sense: RGB apply failed: {e}");
+            Err(e)
+        }
+    }
 }
