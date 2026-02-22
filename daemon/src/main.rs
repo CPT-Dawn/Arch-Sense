@@ -45,6 +45,18 @@ fn calculate_fan_speed(current_temp: u8, curve: &[(u8, u8)]) -> u8 {
     0
 }
 
+fn apply_keyboard_profile(cfg: &DaemonConfig) -> Result<(), String> {
+    if let Some((r, g, b)) = cfg.keyboard_color {
+        return KeyboardInterface::set_global_color(r, g, b, cfg.keyboard_brightness);
+    }
+
+    if let Some(effect) = cfg.keyboard_animation.as_deref() {
+        return KeyboardInterface::set_animation(effect, cfg.keyboard_speed, cfg.keyboard_brightness);
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     println!("🔥 Starting Arch-Sense Background Daemon...");
@@ -62,11 +74,7 @@ async fn main() {
     let _ = HardwareInterface::set_backlight_timeout(initial_config.backlight_timeout).await;
     let _ = HardwareInterface::set_usb_charging(initial_config.usb_charging).await;
 
-    if let Some((r, g, b)) = initial_config.keyboard_color {
-        let _ = KeyboardInterface::set_global_color(r, g, b);
-    } else if let Some(anim) = initial_config.keyboard_animation {
-        let _ = KeyboardInterface::set_animation(&anim);
-    }
+    let _ = apply_keyboard_profile(&initial_config);
 
     // 3. 🚀 THE BACKGROUND WORKER (Fan Curve Loop)
     let config_for_worker = Arc::clone(&shared_config);
@@ -127,6 +135,15 @@ async fn main() {
                                     cpu_fan_percent: cpu_fan,
                                     gpu_fan_percent: gpu_fan,
                                     active_mode: format!("{:?}", cfg.fan_mode), // Read directly from config
+                                    battery_limiter: cfg.battery_limiter,
+                                    lcd_overdrive: cfg.lcd_overdrive,
+                                    boot_animation: cfg.boot_animation,
+                                    backlight_timeout: cfg.backlight_timeout,
+                                    usb_charging: cfg.usb_charging,
+                                    keyboard_color: cfg.keyboard_color,
+                                    keyboard_animation: cfg.keyboard_animation.clone(),
+                                    keyboard_speed: cfg.keyboard_speed,
+                                    keyboard_brightness: cfg.keyboard_brightness,
                                 }
                             }
 
@@ -162,25 +179,83 @@ async fn main() {
                                 cfg.keyboard_animation = None;
                                 cfg.save();
 
-                                match KeyboardInterface::set_global_color(r, g, b) {
+                                match KeyboardInterface::set_global_color(
+                                    r,
+                                    g,
+                                    b,
+                                    cfg.keyboard_brightness,
+                                ) {
                                     Ok(_) => Response::Ack(format!(
-                                        "Keyboard color set to RGB({},{},{})",
-                                        r, g, b
+                                        "Keyboard color set to RGB({},{},{}) @ {}% brightness",
+                                        r, g, b, cfg.keyboard_brightness
                                     )),
                                     Err(e) => Response::Error(e),
                                 }
                             }
                             Ok(Command::SetKeyboardAnimation(effect)) => {
+                                let effect = effect.to_ascii_lowercase();
                                 cfg.keyboard_animation = Some(effect.clone());
                                 cfg.keyboard_color = None;
                                 cfg.save();
 
-                                match KeyboardInterface::set_animation(&effect) {
+                                match KeyboardInterface::set_animation(
+                                    &effect,
+                                    cfg.keyboard_speed,
+                                    cfg.keyboard_brightness,
+                                ) {
                                     Ok(_) => Response::Ack(format!(
-                                        "Keyboard animation set to '{}'",
-                                        effect
+                                        "Keyboard animation set to '{}' (speed {}, brightness {}%)",
+                                        effect, cfg.keyboard_speed, cfg.keyboard_brightness
                                     )),
                                     Err(e) => Response::Error(e),
+                                }
+                            }
+                            Ok(Command::SetKeyboardSpeed(speed)) => {
+                                if !(1..=10).contains(&speed) {
+                                    Response::Error(
+                                        "Keyboard speed must be between 1 and 10".to_string(),
+                                    )
+                                } else {
+                                    cfg.keyboard_speed = speed;
+                                    cfg.save();
+
+                                    if let Some(effect) = cfg.keyboard_animation.clone() {
+                                        match KeyboardInterface::set_animation(
+                                            &effect,
+                                            cfg.keyboard_speed,
+                                            cfg.keyboard_brightness,
+                                        ) {
+                                            Ok(_) => Response::Ack(format!(
+                                                "Keyboard speed set to {}",
+                                                speed
+                                            )),
+                                            Err(e) => Response::Error(e),
+                                        }
+                                    } else {
+                                        Response::Ack(format!(
+                                            "Keyboard speed saved as {} (applies to animated modes)",
+                                            speed
+                                        ))
+                                    }
+                                }
+                            }
+                            Ok(Command::SetKeyboardBrightness(brightness)) => {
+                                if brightness > 100 {
+                                    Response::Error(
+                                        "Keyboard brightness must be between 0 and 100"
+                                            .to_string(),
+                                    )
+                                } else {
+                                    cfg.keyboard_brightness = brightness;
+                                    cfg.save();
+
+                                    match apply_keyboard_profile(&cfg) {
+                                        Ok(_) => Response::Ack(format!(
+                                            "Keyboard brightness set to {}%",
+                                            brightness
+                                        )),
+                                        Err(e) => Response::Error(e),
+                                    }
                                 }
                             }
 
@@ -234,8 +309,20 @@ async fn main() {
                             _ => Response::Error("Unknown command".to_string()),
                         };
 
-                        let response_bytes = serde_json::to_vec(&response).unwrap();
-                        let _ = socket.write_all(&response_bytes).await;
+                        match serde_json::to_vec(&response) {
+                            Ok(response_bytes) => {
+                                let _ = socket.write_all(&response_bytes).await;
+                            }
+                            Err(e) => {
+                                let fallback = Response::Error(format!(
+                                    "Failed to serialize daemon response: {}",
+                                    e
+                                ));
+                                if let Ok(bytes) = serde_json::to_vec(&fallback) {
+                                    let _ = socket.write_all(&bytes).await;
+                                }
+                            }
+                        }
                     }
                 });
             }

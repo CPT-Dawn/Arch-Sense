@@ -12,10 +12,22 @@ pub struct DaemonConfig {
     pub battery_limiter: bool,
     pub keyboard_color: Option<(u8, u8, u8)>,
     pub keyboard_animation: Option<String>,
+    #[serde(default = "default_keyboard_speed")]
+    pub keyboard_speed: u8,
+    #[serde(default = "default_keyboard_brightness")]
+    pub keyboard_brightness: u8,
     pub lcd_overdrive: bool,
     pub boot_animation: bool,
     pub backlight_timeout: bool,
     pub usb_charging: u8,
+}
+
+fn default_keyboard_speed() -> u8 {
+    5
+}
+
+fn default_keyboard_brightness() -> u8 {
+    100
 }
 
 // 🌟 Default settings if the file doesn't exist yet
@@ -26,6 +38,8 @@ impl Default for DaemonConfig {
             battery_limiter: false,
             keyboard_color: Some((0, 255, 255)), // Default Cyan
             keyboard_animation: None,
+            keyboard_speed: default_keyboard_speed(),
+            keyboard_brightness: default_keyboard_brightness(),
             lcd_overdrive: false,
             boot_animation: true,
             backlight_timeout: false,
