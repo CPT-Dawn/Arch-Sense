@@ -1,16 +1,3 @@
-//! # Arch-Sense — Acer Predator Control Center TUI
-//!
-//! A modern terminal UI for managing Acer Predator laptop settings on Arch Linux.
-//! Controls hardware settings via the linuwu_sense kernel module and
-//! keyboard RGB lighting via USB HID protocol (ported from ph16-71-rgb Python).
-//!
-//! ## Usage
-//!   sudo arch-sense          # Launch TUI
-//!   sudo arch-sense --apply  # Apply saved RGB settings and exit (for systemd)
-//!
-//! ## Dependencies
-//!   pacman -S libusb         # Required for USB keyboard communication
-
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
