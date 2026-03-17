@@ -63,7 +63,7 @@ Full per-keyboard RGB configuration through USB HID protocol (VID: `04F2`, PID: 
 
 ### Config Persistence
 
-RGB settings are automatically saved to `~/.config/arch-sense/config.json` on successful apply and are restored on startup. When running under `sudo`, the config is correctly stored in the real user's home directory (via `$SUDO_USER`).
+RGB settings are automatically saved to `/var/lib/arch-sense/config.json` on successful apply and are restored on startup. This single system-wide location is used by both interactive `sudo arch-sense` sessions and the systemd boot service.
 
 ### Systemd Integration
 
@@ -123,21 +123,19 @@ GPU temperature monitoring requires `nvidia-smi`. If you have an NVIDIA GPU with
 
 ## Installation
 
-### Option 1 — Use the Pre-Built Binary (No Rust Required)
+### Option 1 — Install via AUR Helper (`paru` / `yay`)
 
-The repository ships with a pre-built Linux binary at the project root. Just clone and install:
+Install using your preferred AUR helper:
 
 ```bash
-git clone https://github.com/cptdawn/Arch-Sense.git
-cd Arch-Sense
-sudo install -Dm755 arch-sense /usr/local/bin/arch-sense
+paru -S arch-sense
+# or
+yay -S arch-sense
 ```
 
-That's it — no compiler, no build step.
+The package manager handles service integration automatically, so no manual RGB boot setup is required for this method.
 
-### Option 2 — Build from Source (Requires Rust)
-
-If you prefer to compile from source or want to modify the code:
+### Option 2 — Build from Source (Git Clone)
 
 ```bash
 git clone https://github.com/cptdawn/Arch-Sense.git
@@ -146,9 +144,7 @@ cargo build --release
 sudo install -Dm755 target/release/arch-sense /usr/local/bin/arch-sense
 ```
 
-> **Note:** The release profile is configured with `opt-level = 3`, LTO, and symbol stripping for a minimal, optimized binary.
-
-### Enable RGB on Boot (Systemd)
+#### Option 2.1  —Enable RGB on Boot (Systemd) 
 
 ```bash
 sudo cp arch-sense.service /etc/systemd/system/
@@ -175,7 +171,7 @@ sudo arch-sense
 sudo arch-sense --apply
 ```
 
-Reads `~/.config/arch-sense/config.json` and applies the RGB configuration without launching the TUI. This is what the systemd service uses.
+Reads `/var/lib/arch-sense/config.json` and applies the RGB configuration without launching the TUI. This is what the systemd service uses.
 
 ### Help
 

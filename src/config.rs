@@ -4,18 +4,15 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+const CONFIG_DIR: &str = "/var/lib/arch-sense";
+const CONFIG_FILE: &str = "config.json";
+
 pub(crate) fn config_dir() -> PathBuf {
-    // When running via sudo, save config in the real user's home
-    let home = std::env::var("SUDO_USER")
-        .ok()
-        .map(|u| format!("/home/{u}"))
-        .or_else(|| std::env::var("HOME").ok())
-        .unwrap_or_else(|| "/tmp".into());
-    PathBuf::from(home).join(".config").join("arch-sense")
+    PathBuf::from(CONFIG_DIR)
 }
 
 pub fn config_path() -> PathBuf {
-    config_dir().join("config.json")
+    config_dir().join(CONFIG_FILE)
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -32,7 +29,7 @@ impl Default for RgbConfig {
         Self {
             effect: 1, // Static
             color: 9,  // White
-            brightness: 80,
+            brightness: 30,
             speed: 50,
             direction: 0, // Right
         }
