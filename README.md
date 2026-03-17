@@ -225,7 +225,15 @@ arch-sense --help
 
 ```
 arch-sense
-├── src/main.rs          # Single-file application (~1800 lines)
+├── src/lib.rs           # Library-first crate entry (public runtime API)
+├── src/main.rs          # Thin binary shim (CLI args -> lib)
+├── src/app.rs           # App state machine and event loop
+├── src/ui.rs            # Ratatui rendering layer
+├── src/rgb_settings.rs  # RGB protocol + hardware setting models
+├── src/system.rs        # sysfs + sensor I/O
+├── src/config.rs        # Persistent config model and storage
+├── src/constants.rs     # Hardware paths/protocol constants
+├── src/theme.rs         # Shared UI palette
 ├── Cargo.toml           # Rust 2024 edition, release-optimized (LTO + strip)
 ├── arch-sense.service   # systemd oneshot unit for boot RGB
 └── LICENSE              # MIT
