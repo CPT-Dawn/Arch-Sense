@@ -141,7 +141,7 @@ The package manager handles service integration automatically, so no manual RGB 
 git clone https://github.com/cptdawn/Arch-Sense.git
 cd Arch-Sense
 cargo build --release
-sudo install -Dm755 target/release/arch-sense /usr/local/bin/arch-sense
+sudo install -Dm755 target/release/arch-sense /usr/bin/arch-sense
 ```
 
 #### Option 2.1  —Enable RGB on Boot (Systemd) 
