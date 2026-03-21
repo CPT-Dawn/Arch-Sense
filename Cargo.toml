@@ -1,6 +1,6 @@
 [package]
 name = "arch-sense"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 
 [dependencies]
@@ -13,7 +13,7 @@ serde_json = "1.0"
 
 [profile.release]
 opt-level = 3
-lto = "fat"          
-codegen-units = 1    
-panic = "abort"      
+lto = "fat"
+codegen-units = 1
+panic = "abort"
 strip = true
