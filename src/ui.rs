@@ -569,7 +569,7 @@ fn draw_rgb_detail(f: &mut Frame, area: Rect, app: &App) {
         Line::from(Span::styled(desc, Style::new().fg(Theme::FG_DIM))),
         Line::default(),
         Line::from(Span::styled(
-            "  Enter: Apply to keyboard  │  S: Save config  │  ←→: Adjust  │  ↑↓: Param",
+            "  Enter: Apply (auto-saves)  │  ←→: Adjust  │  ↑↓: Param",
             Style::new().fg(Theme::DIM),
         )),
     ];
@@ -610,7 +610,7 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
 
     let help = match app.tab {
         Tab::System => " F1/F2 Tab │ ↑↓ Navigate │ ←→ Cycle │ Enter Confirm/Toggle │ q Quit ",
-        Tab::Rgb => " F1/F2 Tab │ ↑↓ Param │ ←→ Adjust │ Enter Apply │ S Save │ q Quit ",
+        Tab::Rgb => " F1/F2 Tab │ ↑↓ Param │ ←→ Adjust │ Enter Apply (auto-save) │ q Quit ",
     };
 
     let lines = vec![
@@ -631,4 +631,3 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
 
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
-

@@ -3,7 +3,7 @@ use std::time::Instant;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::config::{AppConfig, config_path};
+use crate::config::AppConfig;
 use crate::constants::{PS_BASE, TICK};
 use crate::rgb_settings::{
     RGB_PARAM_COUNT, RgbState, Setting, SettingKind, is_kb_present, load_settings, send_rgb,
@@ -300,7 +300,6 @@ impl App {
             KeyCode::Left | KeyCode::Char('h') => self.rgb.cycle_left(),
             KeyCode::Right | KeyCode::Char('l') => self.rgb.cycle_right(),
             KeyCode::Enter | KeyCode::Char(' ') => self.apply_rgb(),
-            KeyCode::Char('s') | KeyCode::Char('S') => self.save_rgb(),
             _ => {}
         }
     }
@@ -316,20 +315,6 @@ impl App {
             }
             Err(e) => {
                 self.status = format!("  ✗ RGB: {e}");
-                self.err = true;
-            }
-        }
-    }
-
-    fn save_rgb(&mut self) {
-        self.config.rgb = self.rgb.to_config();
-        match self.config.save() {
-            Ok(()) => {
-                self.status = format!("  ✓ Config saved → {}", config_path().display());
-                self.err = false;
-            }
-            Err(e) => {
-                self.status = format!("  ✗ Save: {e}");
                 self.err = true;
             }
         }

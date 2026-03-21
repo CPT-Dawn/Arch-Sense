@@ -212,8 +212,7 @@ arch-sense --help
 | `↓` / `j` | Next parameter |
 | `←` / `h` | Decrease / previous value |
 | `→` / `l` | Increase / next value |
-| `Enter` / `Space` | Apply to keyboard |
-| `s` | Save config to disk |
+| `Enter` / `Space` | Apply to keyboard (auto-saves config) |
 
 ---
 
