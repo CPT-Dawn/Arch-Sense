@@ -1,0 +1,119 @@
+name: Update AUR Package
+
+on:
+    release:
+        types: [published]
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Release tag (example: v1.2.0)"
+                required: true
+
+permissions:
+    contents: read
+
+jobs:
+    aur-update:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout source repository
+              uses: actions/checkout@v4
+
+            - name: Resolve release tag
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+                    tag="${{ github.event.inputs.tag }}"
+                  else
+                    tag="${{ github.event.release.tag_name }}"
+                  fi
+
+                  if [[ -z "$tag" ]]; then
+                    echo "Release tag is empty" >&2
+                    exit 1
+                  fi
+
+                  echo "AUR_RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+
+            - name: Configure SSH for AUR
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  mkdir -p "$HOME/.ssh"
+
+                  key_raw='${{ secrets.AUR_SSH_PRIVATE_KEY }}'
+                  if [[ -z "$key_raw" ]]; then
+                    echo "AUR_SSH_PRIVATE_KEY is empty." >&2
+                    exit 1
+                  fi
+
+                  if grep -q "BEGIN .*PRIVATE KEY" <<< "$key_raw"; then
+                    printf '%s\n' "$key_raw" | tr -d '\r' > "$HOME/.ssh/aur"
+                  else
+                    printf '%s' "$key_raw" | tr -d '\r\n' | base64 -d > "$HOME/.ssh/aur"
+                  fi
+
+                  chmod 600 "$HOME/.ssh/aur"
+
+                  if ! ssh-keygen -y -f "$HOME/.ssh/aur" >/dev/null 2>&1; then
+                    echo "Invalid private key in AUR_SSH_PRIVATE_KEY." >&2
+                    exit 1
+                  fi
+
+                  ssh-keyscan -t rsa,ed25519 aur.archlinux.org >> "$HOME/.ssh/known_hosts"
+
+                  cat > "$HOME/.ssh/config" << 'EOF'
+                  Host aur.archlinux.org
+                    User aur
+                    IdentityFile ~/.ssh/aur
+                    IdentitiesOnly yes
+                    StrictHostKeyChecking yes
+                  EOF
+
+            - name: Clone AUR repository
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  git clone ssh://aur@aur.archlinux.org/arch-sense.git aur-repo
+
+            - name: Generate PKGBUILD and .SRCINFO
+              shell: bash
+              working-directory: aur-repo
+              env:
+                  GITHUB_REF_NAME: ${{ env.AUR_RELEASE_TAG }}
+                  GITHUB_REPOSITORY: ${{ github.repository }}
+                  GITHUB_SERVER_URL: ${{ github.server_url }}
+                  AUR_MAINTAINER: CPT_Dawn <dawnsp0456@gmail.com>
+                  PKGREL: "1"
+              run: |
+                  set -euo pipefail
+                  bash ../.github/scripts/generate_aur_files.sh
+
+            - name: Copy install script
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  # Copy the .install file from your GitHub source to the AUR folder
+                  cp arch-sense.install aur-repo/
+
+            - name: Commit and push AUR changes
+              shell: bash
+              working-directory: aur-repo
+              run: |
+                  set -euo pipefail
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+
+                  # Add the install file to git alongside the package files
+                  git add PKGBUILD .SRCINFO arch-sense.install
+                  if git diff --cached --quiet; then
+                    echo "No PKGBUILD, .SRCINFO, or install script changes detected."
+                    exit 0
+                  fi
+
+                  pkgver=$(awk -F= '/^pkgver=/{print $2}' PKGBUILD)
+                  pkgver=${pkgver// /}
+
+                  git commit -m "arch-sense: update to ${pkgver}"
+                  git push origin master
