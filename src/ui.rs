@@ -7,6 +7,9 @@ use crate::models::{FocusPanel, Rgb, RgbField, COLOR_PALETTE, RANDOM_COLOR_INDEX
 use crate::permissions::UsbAccess;
 use crate::theme::Theme;
 
+/// Consistent spacing/padding throughout the UI (in character units)
+const SPACING: u16 = 1;
+
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
     
@@ -23,7 +26,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         Constraint::Min(18),
         Constraint::Length(4),
     ])
-    .margin(1)
+    .margin(SPACING)
     .areas(area);
 
     draw_header(frame, header, app);
@@ -34,14 +37,14 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
 fn draw_body(frame: &mut Frame, area: Rect, app: &App) {
     let [left, _, right] = Layout::horizontal([
         Constraint::Percentage(42),
-        Constraint::Length(1),
+        Constraint::Length(SPACING),
         Constraint::Percentage(58),
     ])
     .areas(area);
 
     let [controls, _, rgb] = Layout::vertical([
         Constraint::Percentage(58),
-        Constraint::Length(1),
+        Constraint::Length(SPACING),
         Constraint::Percentage(42),
     ])
     .areas(left);
@@ -271,7 +274,7 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Length(8),
     ];
 
-    frame.render_widget(Table::new(rows, widths).column_spacing(1), inner);
+    frame.render_widget(Table::new(rows, widths).column_spacing(SPACING), inner);
 }
 
 fn draw_rgb(frame: &mut Frame, area: Rect, app: &App) {
@@ -284,6 +287,7 @@ fn draw_rgb(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Length(1),
         Constraint::Length(2),
     ])
+    .spacing(SPACING)
     .areas(inner);
 
     draw_rgb_rows(frame, rows_area, app);
@@ -429,6 +433,7 @@ fn draw_sensors(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Percentage(25),
         Constraint::Percentage(25),
     ])
+    .spacing(SPACING)
     .areas(inner);
 
     draw_metric(
@@ -488,6 +493,7 @@ fn draw_metric(
         Constraint::Length(1),
         Constraint::Length(1),
     ])
+    .spacing(SPACING)
     .areas(area);
 
     let color = match kind {
@@ -562,7 +568,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(block, area);
 
     let [context, message] =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
+        .spacing(SPACING)
+        .areas(inner);
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
