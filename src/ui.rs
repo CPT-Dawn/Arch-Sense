@@ -9,7 +9,14 @@ use crate::theme::Theme;
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
-    frame.render_widget(Block::new().style(Style::new().bg(Theme::BG)), area);
+    
+    // Don't force a background color - let the terminal's default show through
+    // This enables transparency/blur support and respects the user's terminal theme
+    let base_style = match Theme::BG {
+        Some(bg) => Style::new().bg(bg),
+        None => Style::new(),
+    };
+    frame.render_widget(Block::new().style(base_style), area);
 
     let [header, body, footer] = Layout::vertical([
         Constraint::Length(4),
@@ -52,16 +59,24 @@ fn panel_block<'a>(title: &'a str, panel: FocusPanel, app: &App) -> Block<'a> {
         Theme::BORDER_MUTED
     };
 
-    Block::bordered()
+    // Apply background color only if it's Some, otherwise use terminal default
+    let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(border))
-        .style(Style::new().bg(Theme::SURFACE))
         .title(Span::styled(
             format!(" {title} "),
             Style::new()
                 .fg(if focused { Theme::TEXT } else { Theme::MUTED })
                 .bold(),
-        ))
+        ));
+    
+    // Apply optional background
+    block = match Theme::SURFACE {
+        Some(bg) => block.style(Style::new().bg(bg)),
+        None => block,
+    };
+    
+    block
 }
 
 fn pulse_color(app: &App, base: Color, pulse: Color) -> Color {
@@ -84,10 +99,16 @@ fn blend(a: Color, b: Color, mix: f64) -> Color {
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::bordered()
+    let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(Theme::BORDER))
-        .style(Style::new().bg(Theme::SURFACE));
+        .border_style(Style::new().fg(Theme::BORDER));
+    
+    // Apply optional background
+    block = match Theme::SURFACE {
+        Some(bg) => block.style(Style::new().bg(bg)),
+        None => block,
+    };
+    
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -140,9 +161,13 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn badge<'a>(label: &'a str, value: &'a str, color: Color) -> Span<'a> {
+    let mut style = Style::new().fg(color).bold();
+    if let Some(bg) = Theme::ELEVATED {
+        style = style.bg(bg);
+    }
     Span::styled(
         format!(" {label}:{value} "),
-        Style::new().fg(color).bg(Theme::ELEVATED).bold(),
+        style,
     )
 }
 
@@ -161,6 +186,14 @@ fn keyboard_color(access: &UsbAccess) -> Color {
         UsbAccess::PermissionDenied => Theme::WARNING,
         UsbAccess::NotFound => Theme::WARNING,
         UsbAccess::Error(_) => Theme::DANGER,
+    }
+}
+
+/// Helper function to apply optional background color to a style
+fn style_with_bg(base: Style, bg: Option<Color>) -> Style {
+    match bg {
+        Some(color) => base.bg(color),
+        None => base,
     }
 }
 
@@ -188,25 +221,28 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
             let pending = item.pending.is_some();
             let error = item.last_error.is_some();
             let base_style = if selected {
-                Style::new().fg(Theme::TEXT).bg(Theme::ELEVATED).bold()
+                style_with_bg(Style::new().fg(Theme::TEXT).bold(), Theme::ELEVATED)
             } else {
                 Style::new().fg(Theme::TEXT)
             };
             let value_style = if error {
-                Style::new().fg(Theme::DANGER).bg(if selected {
+                let base = Style::new().fg(Theme::DANGER);
+                let bg = if selected {
                     Theme::ELEVATED
                 } else {
                     Theme::SURFACE
-                })
+                };
+                style_with_bg(base, bg)
             } else if pending {
-                Style::new()
+                let base = Style::new()
                     .fg(Theme::WARNING)
-                    .bg(if selected {
-                        Theme::ELEVATED
-                    } else {
-                        Theme::SURFACE
-                    })
-                    .bold()
+                    .bold();
+                let bg = if selected {
+                    Theme::ELEVATED
+                } else {
+                    Theme::SURFACE
+                };
+                style_with_bg(base, bg)
             } else {
                 Style::new().fg(Theme::ACCENT)
             };
@@ -273,12 +309,12 @@ fn draw_rgb_rows(frame: &mut Frame, area: Rect, app: &App) {
         .map(|(index, (field, value))| {
             let selected = app.focus == FocusPanel::Rgb && index == app.selected_rgb_field;
             let style = if selected {
-                Style::new().fg(Theme::TEXT).bg(Theme::ELEVATED).bold()
+                style_with_bg(Style::new().fg(Theme::TEXT).bold(), Theme::ELEVATED)
             } else {
                 Style::new().fg(Theme::TEXT)
             };
             let value_style = if selected {
-                Style::new().fg(Theme::ACCENT).bg(Theme::ELEVATED).bold()
+                style_with_bg(Style::new().fg(Theme::ACCENT).bold(), Theme::ELEVATED)
             } else {
                 Style::new().fg(Theme::ACCENT)
             };
@@ -314,24 +350,15 @@ fn draw_palette(frame: &mut Frame, area: Rect, app: &App) {
     let mut swatches = vec![Span::styled(" Palette ", Style::new().fg(Theme::MUTED))];
     for (index, color) in COLOR_PALETTE.iter().enumerate() {
         let selected = index == app.rgb.color_idx;
-        let style = if index == RANDOM_COLOR_INDEX {
-            Style::new()
-                .fg(Theme::ACCENT_2)
-                .bg(if selected {
-                    Theme::ELEVATED
-                } else {
-                    Theme::SURFACE
-                })
-                .bold()
+        let bg = if selected {
+            Theme::ELEVATED
         } else {
-            Style::new()
-                .fg(to_color(color.rgb))
-                .bg(if selected {
-                    Theme::ELEVATED
-                } else {
-                    Theme::SURFACE
-                })
-                .bold()
+            Theme::SURFACE
+        };
+        let style = if index == RANDOM_COLOR_INDEX {
+            style_with_bg(Style::new().fg(Theme::ACCENT_2).bold(), bg)
+        } else {
+            style_with_bg(Style::new().fg(to_color(color.rgb)).bold(), bg)
         };
         swatches.push(Span::styled(if selected { "▣" } else { "■" }, style));
         swatches.push(Span::raw(" "));
@@ -486,10 +513,14 @@ fn draw_metric(
         top,
     );
 
+    let gauge_style = style_with_bg(
+        Style::new().fg(color).bold(),
+        Theme::SURFACE_ALT
+    );
     let gauge = Gauge::default()
         .ratio(metric.ratio())
-        .gauge_style(Style::new().fg(color).bg(Theme::SURFACE_ALT).bold())
-        .style(Style::new().bg(Theme::SURFACE))
+        .gauge_style(gauge_style)
+        .style(style_with_bg(Style::new(), Theme::SURFACE))
         .label("");
     frame.render_widget(gauge, gauge_area);
 
@@ -502,7 +533,7 @@ fn draw_metric(
         .data(data)
         .max(metric.max.round() as u64)
         .bar_set(symbols::bar::NINE_LEVELS)
-        .style(Style::new().fg(color).bg(Theme::SURFACE));
+        .style(style_with_bg(Style::new().fg(color), Theme::SURFACE));
     frame.render_widget(sparkline, spark_area);
 }
 
@@ -519,17 +550,23 @@ fn metric_value(metric: &AnimatedMetric, unit: &str, kind: MetricKind) -> String
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let block = Block::bordered()
+    let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(Theme::BORDER))
-        .style(Style::new().bg(Theme::SURFACE));
+        .border_style(Style::new().fg(Theme::BORDER));
+    
+    // Apply optional background
+    block = match Theme::SURFACE {
+        Some(bg) => block.style(Style::new().bg(bg)),
+        None => block,
+    };
+    
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let [context, message] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
 
-    let focus_style = Style::new().fg(Theme::BG).bg(Theme::ACCENT).bold();
+    let focus_style = style_with_bg(Style::new().fg(Theme::BG.unwrap_or(Color::White)).bg(Theme::ACCENT).bold(), None);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(format!(" {} ", app.focus.label()), focus_style),
@@ -542,13 +579,19 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     );
 
     let mut message_spans = vec![
-        Span::styled(
-            format!(" {} ", message_level(app.message.level)),
-            Style::new()
-                .fg(Theme::BG)
-                .bg(message_color(app.message.level))
-                .bold(),
-        ),
+        {
+            let level_style = style_with_bg(
+                Style::new()
+                    .fg(Theme::BG.unwrap_or(Color::White))
+                    .bg(message_color(app.message.level))
+                    .bold(),
+                None,
+            );
+            Span::styled(
+                format!(" {} ", message_level(app.message.level)),
+                level_style,
+            )
+        },
         Span::raw(" "),
         Span::styled(
             app.message.text.clone(),
