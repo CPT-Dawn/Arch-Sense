@@ -11,19 +11,20 @@ impl FocusPanel {
     pub(crate) fn next(self) -> Self {
         match self {
             Self::Controls => Self::Rgb,
-            Self::Rgb => Self::Sensors,
+            Self::Rgb => Self::Controls, // Skip Sensors - it's read-only
             Self::Sensors => Self::Controls,
         }
     }
 
     pub(crate) fn previous(self) -> Self {
         match self {
-            Self::Controls => Self::Sensors,
-            Self::Rgb => Self::Controls,
+            Self::Controls => Self::Rgb,
+            Self::Rgb => Self::Controls, // Skip Sensors - it's read-only
             Self::Sensors => Self::Rgb,
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Controls => "Controls",

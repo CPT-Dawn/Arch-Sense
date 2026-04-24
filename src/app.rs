@@ -294,9 +294,6 @@ impl App {
             }
             KeyCode::Tab => self.set_focus(self.focus.next()),
             KeyCode::BackTab => self.set_focus(self.focus.previous()),
-            KeyCode::F(1) => self.set_focus(FocusPanel::Controls),
-            KeyCode::F(2) => self.set_focus(FocusPanel::Rgb),
-            KeyCode::F(3) => self.set_focus(FocusPanel::Sensors),
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 self.request_snapshot();
                 self.set_message(MessageLevel::Info, "Refresh requested");
@@ -317,7 +314,6 @@ impl App {
         if self.focus != focus {
             self.focus = focus;
             self.focus_pulse = 1.0;
-            self.set_message(MessageLevel::Info, format!("Focus: {}", focus.label()));
         }
     }
 
@@ -541,7 +537,7 @@ impl App {
             FocusPanel::Controls => self.controls_context(),
             FocusPanel::Rgb => self.rgb_context(),
             FocusPanel::Sensors => {
-                "Enter/r refresh sensors | gauges animate toward latest readings".to_string()
+                "Gauges animate toward latest readings | r refresh sensors".to_string()
             }
         }
     }

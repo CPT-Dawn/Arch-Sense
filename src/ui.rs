@@ -150,8 +150,6 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             keyboard_label(&app.keyboard),
             keyboard_color(&app.keyboard),
         ),
-        Span::raw(" "),
-        badge("FOCUS", app.focus.label(), Theme::ACCENT),
     ]);
 
     frame.render_widget(
@@ -566,12 +564,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let [context, message] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
 
-    let focus_style = style_with_bg(Style::new().fg(Theme::BG.unwrap_or(Color::White)).bg(Theme::ACCENT).bold(), None);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(format!(" {} ", app.focus.label()), focus_style),
-            Span::raw(" "),
-            Span::styled("Tab/F1/F2/F3 focus  q Quit", Style::new().fg(Theme::MUTED)),
+            Span::styled("Tab switch panels", Style::new().fg(Theme::MUTED)),
+            Span::styled("  |  r refresh  |  ", Style::new().fg(Theme::MUTED)),
+            Span::styled("q quit", Style::new().fg(Theme::MUTED)),
             Span::styled("  |  ", Style::new().fg(Theme::SUBTLE)),
             Span::styled(app.context_hint(), Style::new().fg(Theme::TEXT)),
         ])),
