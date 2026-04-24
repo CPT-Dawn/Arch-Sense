@@ -115,8 +115,13 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // Apply inner padding/margin to the content area
+    let content_area = Layout::vertical([Constraint::Min(0)])
+        .margin(SPACING)
+        .split(inner)[0];
+
     let [brand, indicators] =
-        Layout::horizontal([Constraint::Percentage(56), Constraint::Percentage(44)]).areas(inner);
+        Layout::horizontal([Constraint::Percentage(56), Constraint::Percentage(44)]).areas(content_area);
 
     let uptime = app.boot_started.elapsed().as_secs_f64();
     let boot_marker = if uptime < 1.4 {
@@ -203,12 +208,17 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // Apply inner padding/margin to the content area
+    let content_area = Layout::vertical([Constraint::Min(0)])
+        .margin(SPACING)
+        .split(inner)[0];
+
     if app.controls.is_empty() {
         frame.render_widget(
             Paragraph::new(" Waiting for hardware controls...")
                 .style(Style::new().fg(Theme::MUTED))
                 .alignment(Alignment::Center),
-            inner,
+            content_area,
         );
         return;
     }
@@ -274,7 +284,7 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Length(8),
     ];
 
-    frame.render_widget(Table::new(rows, widths).column_spacing(SPACING), inner);
+    frame.render_widget(Table::new(rows, widths).column_spacing(SPACING), content_area);
 }
 
 fn draw_rgb(frame: &mut Frame, area: Rect, app: &App) {
@@ -282,13 +292,18 @@ fn draw_rgb(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // Apply inner padding/margin to the content area
+    let content_area = Layout::vertical([Constraint::Min(0)])
+        .margin(SPACING)
+        .split(inner)[0];
+
     let [rows_area, palette_area, preview_area] = Layout::vertical([
         Constraint::Min(5),
         Constraint::Length(1),
         Constraint::Length(2),
     ])
     .spacing(SPACING)
-    .areas(inner);
+    .areas(content_area);
 
     draw_rgb_rows(frame, rows_area, app);
     draw_palette(frame, palette_area, app);
@@ -427,6 +442,11 @@ fn draw_sensors(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // Apply inner padding/margin to the content area
+    let content_area = Layout::vertical([Constraint::Min(0)])
+        .margin(SPACING)
+        .split(inner)[0];
+
     let [cpu_t, gpu_t, cpu_f, gpu_f] = Layout::vertical([
         Constraint::Percentage(25),
         Constraint::Percentage(25),
@@ -434,7 +454,7 @@ fn draw_sensors(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Percentage(25),
     ])
     .spacing(SPACING)
-    .areas(inner);
+    .areas(content_area);
 
     draw_metric(
         frame,
@@ -567,10 +587,15 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // Apply inner padding/margin to the content area
+    let content_area = Layout::vertical([Constraint::Min(0)])
+        .margin(SPACING)
+        .split(inner)[0];
+
     let [context, message] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
         .spacing(SPACING)
-        .areas(inner);
+        .areas(content_area);
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
