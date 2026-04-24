@@ -5,9 +5,9 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 
 use crate::config::AppConfig;
 use crate::constants::{PS_BASE, TICK};
+use crate::permissions::{keyboard_access, PermissionReport, UsbAccess};
 use crate::rgb_settings::{
-    is_kb_present, load_settings, send_rgb, write_setting, RgbState, Setting, SettingKind,
-    RGB_PARAM_COUNT,
+    load_settings, send_rgb, write_setting, RgbState, Setting, SettingKind, RGB_PARAM_COUNT,
 };
 use crate::system::{cpu_temp, fan_speeds, gpu_temp, thermal_choices};
 use crate::ui::draw;
@@ -47,6 +47,8 @@ impl App {
         let module_ok = std::path::Path::new(PS_BASE).exists();
         let config = AppConfig::load();
         let rgb = RgbState::from_config(&config.rgb);
+        let permissions = PermissionReport::collect();
+        let permission_hint = permissions.startup_hint();
 
         Self {
             tab: Tab::System,
@@ -61,12 +63,14 @@ impl App {
             ctrl_sel: 0,
             rgb,
             config,
-            status: if module_ok {
-                "Ready — F1: System  F2: Keyboard RGB  Tab: Switch".into()
-            } else {
+            status: if !module_ok {
                 "⚠ linuwu_sense module not loaded".into()
+            } else if let Some(hint) = permission_hint {
+                hint
+            } else {
+                "Ready — F1: System  F2: Keyboard RGB  Tab: Switch".into()
             },
-            err: !module_ok,
+            err: !module_ok || permissions.has_limited_access(),
             quit: false,
             module_ok,
             tick_n: 0,
@@ -83,7 +87,8 @@ impl App {
 
         // Re-check keyboard presence every 5 seconds
         if self.tick_n.is_multiple_of(5) {
-            self.rgb.kb_found = is_kb_present();
+            self.rgb.kb_access = keyboard_access();
+            self.rgb.kb_found = !matches!(self.rgb.kb_access, UsbAccess::NotFound);
         }
 
         // Refresh settings only when no pending cycle preview
@@ -307,11 +312,18 @@ impl App {
     fn apply_rgb(&mut self) {
         match send_rgb(&self.rgb) {
             Ok(msg) => {
-                self.status = format!("  ✓ {msg}");
-                self.err = false;
                 // Auto-save on successful apply
                 self.config.rgb = self.rgb.to_config();
-                let _ = self.config.save();
+                match self.config.save() {
+                    Ok(()) => {
+                        self.status = format!("  ✓ {msg}");
+                        self.err = false;
+                    }
+                    Err(e) => {
+                        self.status = format!("  ✓ {msg}; save failed: {e}");
+                        self.err = true;
+                    }
+                }
             }
             Err(e) => {
                 self.status = format!("  ✗ RGB: {e}");

@@ -63,7 +63,7 @@ Full per-keyboard RGB configuration through USB HID protocol (VID: `04F2`, PID: 
 
 ### Config Persistence
 
-RGB settings are automatically saved to `/var/lib/arch-sense/config.json` on successful apply and are restored on startup. This single system-wide location is used by both interactive `sudo arch-sense` sessions and the systemd boot service.
+RGB settings are automatically saved to `/var/lib/arch-sense/config.json` on successful apply and are restored on startup. This single system-wide location is shared by the interactive TUI and the systemd boot service.
 
 ### Systemd Integration
 
@@ -144,6 +144,28 @@ cargo build --release
 sudo install -Dm755 target/release/arch-sense /usr/bin/arch-sense
 ```
 
+### One-Time Rootless Permission Setup
+
+Arch-Sense can run as a normal user after a one-time hardware permission setup:
+
+```bash
+arch-sense --install-permissions
+```
+
+This installs:
+
+- a udev rule for the Acer keyboard USB device (`04f2:0117`)
+- an `arch-sense` system group for sysfs control files and `/var/lib/arch-sense`
+- a small `arch-sense-permissions.service` that reapplies sysfs permissions after boot/module reload
+
+The command uses `pkexec` when launched as a normal user. If your system has no polkit agent, run:
+
+```bash
+sudo arch-sense --install-permissions
+```
+
+If the command adds your user to the `arch-sense` group, log out and back in once. After that, launch with plain `arch-sense`.
+
 #### Option 2.1  —Enable RGB on Boot (Systemd) 
 
 ```bash
@@ -160,18 +182,26 @@ This runs `arch-sense --apply` at boot, which reads the saved config and applies
 ### Launch the TUI
 
 ```bash
-sudo arch-sense
+arch-sense
 ```
 
-> Root privileges are required for sysfs writes and USB device access.
+If the status bar shows `KB LOCKED` or permission errors, run `arch-sense --doctor` and then `arch-sense --install-permissions`.
 
 ### Apply Saved RGB Settings (Headless)
 
 ```bash
-sudo arch-sense --apply
+arch-sense --apply
 ```
 
 Reads `/var/lib/arch-sense/config.json` and applies the RGB configuration without launching the TUI. This is what the systemd service uses.
+
+### Permission Diagnostics
+
+```bash
+arch-sense --doctor
+```
+
+Reports USB, sysfs, and group setup status.
 
 ### Help
 
@@ -281,11 +311,12 @@ Packet structure:
 | Issue | Solution |
 |---|---|
 | `⚠ linuwu_sense module not loaded` | Install the kernel module (see [Prerequisites](#1-install-the-linuwu_sense-kernel-module)) |
-| `Keyboard not found (VID:04F2 PID:0117)` | Ensure you're running with `sudo` and the keyboard is the Acer Predator PH16-71 |
+| `Keyboard not found (VID:04F2 PID:0117)` | Ensure the keyboard is the Acer Predator PH16-71 |
+| `KB LOCKED` / USB permission denied | Run `arch-sense --install-permissions`, then log out and back in if prompted |
 | `Failed to detach kernel driver` | Another process may be holding the USB interface — close any other RGB software |
 | GPU temperature shows `N/A` | Install NVIDIA proprietary drivers or `nvidia-smi` is not available |
 | Settings show `N/A` | The kernel module is loaded but sysfs nodes aren't populated — check `dmesg` for errors |
-| Permission denied on sysfs write | Must run with `sudo` |
+| Permission denied on sysfs write | Run `arch-sense --doctor`, then `arch-sense --install-permissions` |
 
 ---
 

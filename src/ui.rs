@@ -2,6 +2,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::*;
 
 use crate::app::{App, Tab};
+use crate::permissions::UsbAccess;
 use crate::rgb_settings::{SettingKind, COLOR_PALETTE, EFFECTS, RANDOM_COLOR_IDX};
 use crate::theme::Theme;
 
@@ -601,10 +602,13 @@ fn draw_status(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(" NO MODULE ", Style::new().fg(Theme::ERR).bold())
     };
 
-    let kb_span = if app.rgb.kb_found {
-        Span::styled(" KB ✓ ", Style::new().fg(Theme::COOL).bold())
-    } else {
-        Span::styled(" NO KB ", Style::new().fg(Theme::WARM).bold())
+    let kb_span = match &app.rgb.kb_access {
+        UsbAccess::Accessible => Span::styled(" KB ✓ ", Style::new().fg(Theme::COOL).bold()),
+        UsbAccess::PermissionDenied => {
+            Span::styled(" KB LOCKED ", Style::new().fg(Theme::WARM).bold())
+        }
+        UsbAccess::NotFound => Span::styled(" NO KB ", Style::new().fg(Theme::WARM).bold()),
+        UsbAccess::Error(_) => Span::styled(" KB ERR ", Style::new().fg(Theme::ERR).bold()),
     };
 
     let sc = if app.err { Theme::ERR } else { Theme::FG_DIM };

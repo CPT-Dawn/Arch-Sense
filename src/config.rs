@@ -1,8 +1,11 @@
 use std::fs;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+
+use crate::permissions::setup_hint;
 
 const CONFIG_DIR: &str = "/var/lib/arch-sense";
 const CONFIG_FILE: &str = "config.json";
@@ -50,9 +53,18 @@ impl AppConfig {
     }
 
     pub(crate) fn save(&self) -> Result<()> {
-        fs::create_dir_all(config_dir())?;
+        fs::create_dir_all(config_dir())
+            .map_err(|e| config_error(e, "creating config directory"))?;
         let json = serde_json::to_string_pretty(self)?;
-        fs::write(config_path(), json)?;
+        fs::write(config_path(), json).map_err(|e| config_error(e, "writing config file"))?;
         Ok(())
+    }
+}
+
+fn config_error(err: std::io::Error, action: &str) -> anyhow::Error {
+    if err.kind() == ErrorKind::PermissionDenied {
+        anyhow::anyhow!("{action} failed: {err}; {}", setup_hint())
+    } else {
+        anyhow::anyhow!("{action} failed: {err}")
     }
 }

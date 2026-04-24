@@ -2,9 +2,10 @@ use anyhow::{Context, Result};
 
 use crate::config::RgbConfig;
 use crate::constants::{
-    ps, BRIGHT_HW_MAX, KB_EP, KB_IFACE, KB_PID, KB_VID, PLATFORM_PROFILE, PREAMBLE, SPEED_HW_FAST,
-    SPEED_HW_SLOW, USB_TIMEOUT,
+    ps, BRIGHT_HW_MAX, KB_EP, KB_IFACE, PLATFORM_PROFILE, PREAMBLE, SPEED_HW_FAST, SPEED_HW_SLOW,
+    USB_TIMEOUT,
 };
+use crate::permissions::{keyboard_access, keyboard_present, open_keyboard, setup_hint, UsbAccess};
 use crate::system::{sysfs_read, sysfs_write};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -221,38 +222,53 @@ fn make_effect_pkt(
 
 /// Send USB HID commands to the keyboard.
 fn send_usb_commands(commands: &[&[u8]]) -> Result<String> {
-    let handle = rusb::open_device_with_vid_pid(KB_VID, KB_PID)
-        .context("Keyboard not found (VID:04F2 PID:0117). Ensure connected & run with sudo.")?;
+    let handle = open_keyboard()?;
 
     let was_attached = handle.kernel_driver_active(KB_IFACE).unwrap_or(false);
     if was_attached {
-        handle
-            .detach_kernel_driver(KB_IFACE)
-            .context("Failed to detach kernel driver from interface 3")?;
+        handle.detach_kernel_driver(KB_IFACE).with_context(|| {
+            format!(
+                "Failed to detach kernel driver from interface 3; {}",
+                setup_hint()
+            )
+        })?;
     }
 
-    handle
+    if let Err(err) = handle
         .claim_interface(KB_IFACE)
-        .context("Failed to claim USB interface 3")?;
+        .with_context(|| format!("Failed to claim USB interface 3; {}", setup_hint()))
+    {
+        if was_attached {
+            let _ = handle.attach_kernel_driver(KB_IFACE);
+        }
+        return Err(err);
+    }
 
     let _ = handle.clear_halt(KB_EP); // ignore errors, not all devices need it
 
-    for cmd in commands {
-        // bmRequestType 0x21 = Host-to-Device | Class | Interface
-        // bRequest 0x09 = SET_REPORT
-        // wValue 0x0300, wIndex = interface 3
-        handle
-            .write_control(0x21, 0x09, 0x0300, KB_IFACE as u16, cmd, USB_TIMEOUT)
-            .context("USB control transfer failed")?;
-    }
+    let transfer_result = (|| -> Result<()> {
+        for cmd in commands {
+            // bmRequestType 0x21 = Host-to-Device | Class | Interface
+            // bRequest 0x09 = SET_REPORT
+            // wValue 0x0300, wIndex = interface 3
+            handle
+                .write_control(0x21, 0x09, 0x0300, KB_IFACE as u16, cmd, USB_TIMEOUT)
+                .context("USB control transfer failed")?;
+        }
 
-    handle
+        Ok(())
+    })();
+
+    let release_result = handle
         .release_interface(KB_IFACE)
-        .context("Failed to release USB interface")?;
+        .context("Failed to release USB interface");
 
     if was_attached {
         let _ = handle.attach_kernel_driver(KB_IFACE);
     }
+
+    transfer_result?;
+    release_result?;
 
     Ok("RGB applied successfully".into())
 }
@@ -279,7 +295,7 @@ pub(crate) fn send_rgb(rgb: &RgbState) -> Result<String> {
 }
 
 pub(crate) fn is_kb_present() -> bool {
-    rusb::open_device_with_vid_pid(KB_VID, KB_PID).is_some()
+    keyboard_present()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -499,10 +515,14 @@ pub(crate) struct RgbState {
     pub(crate) dir_idx: usize,
     pub(crate) sel: usize, // selected parameter row (0..4)
     pub(crate) kb_found: bool,
+    pub(crate) kb_access: UsbAccess,
 }
 
 impl RgbState {
     pub(crate) fn from_config(cfg: &RgbConfig) -> Self {
+        let kb_access = keyboard_access();
+        let kb_found = !matches!(kb_access, UsbAccess::NotFound);
+
         Self {
             effect_idx: cfg.effect.min(EFFECTS.len() - 1),
             color_idx: cfg.color.min(COLOR_PALETTE.len() - 1),
@@ -510,7 +530,8 @@ impl RgbState {
             speed: cfg.speed.min(100),
             dir_idx: cfg.direction.min(DIRECTIONS.len() - 1),
             sel: 0,
-            kb_found: is_kb_present(),
+            kb_found,
+            kb_access,
         }
     }
 

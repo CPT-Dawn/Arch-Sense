@@ -1,16 +1,24 @@
 use std::fs;
+use std::io::ErrorKind;
 use std::process::Command;
 
 use anyhow::Result;
 
 use crate::constants::{ps, CPU_TEMP_PATH, PROFILE_CHOICES};
+use crate::permissions::setup_hint;
 
 pub(crate) fn sysfs_read(path: &str) -> Option<String> {
     fs::read_to_string(path).ok().map(|s| s.trim().to_string())
 }
 
 pub(crate) fn sysfs_write(path: &str, val: &str) -> Result<()> {
-    fs::write(path, val).map_err(|e| anyhow::anyhow!("{e} — writing '{val}' to {path}"))
+    fs::write(path, val).map_err(|e| {
+        if e.kind() == ErrorKind::PermissionDenied {
+            anyhow::anyhow!("{e} - writing '{val}' to {path}; {}", setup_hint())
+        } else {
+            anyhow::anyhow!("{e} - writing '{val}' to {path}")
+        }
+    })
 }
 
 pub(crate) fn cpu_temp() -> Option<f64> {
