@@ -2,7 +2,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::*;
 
 use crate::app::{App, Tab};
-use crate::rgb_settings::{COLOR_PALETTE, EFFECTS, RANDOM_COLOR_IDX, SettingKind};
+use crate::rgb_settings::{SettingKind, COLOR_PALETTE, EFFECTS, RANDOM_COLOR_IDX};
 use crate::theme::Theme;
 
 pub(crate) fn draw(f: &mut Frame, app: &App) {
@@ -478,15 +478,16 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
         )),
     ];
 
-    if let Some(pidx) = s.pending
-        && let SettingKind::Cycle(ref opts) = s.kind
-        && let Some(opt) = opts.get(pidx)
-    {
-        lines.push(Line::from(vec![
-            Span::styled("  Preview: ", Style::new().fg(Theme::WARM)),
-            Span::styled(opt.label.clone(), Style::new().fg(Theme::WARM).bold()),
-            Span::styled("  → Enter to apply", Style::new().fg(Theme::FG_DIM)),
-        ]));
+    if let Some(pidx) = s.pending {
+        if let SettingKind::Cycle(ref opts) = s.kind {
+            if let Some(opt) = opts.get(pidx) {
+                lines.push(Line::from(vec![
+                    Span::styled("  Preview: ", Style::new().fg(Theme::WARM)),
+                    Span::styled(opt.label.clone(), Style::new().fg(Theme::WARM).bold()),
+                    Span::styled("  → Enter to apply", Style::new().fg(Theme::FG_DIM)),
+                ]));
+            }
+        }
     }
 
     let hint = match &s.kind {

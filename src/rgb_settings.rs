@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 
 use crate::config::RgbConfig;
 use crate::constants::{
-    BRIGHT_HW_MAX, KB_EP, KB_IFACE, KB_PID, KB_VID, PLATFORM_PROFILE, PREAMBLE, SPEED_HW_FAST,
-    SPEED_HW_SLOW, USB_TIMEOUT, ps,
+    ps, BRIGHT_HW_MAX, KB_EP, KB_IFACE, KB_PID, KB_VID, PLATFORM_PROFILE, PREAMBLE, SPEED_HW_FAST,
+    SPEED_HW_SLOW, USB_TIMEOUT,
 };
 use crate::system::{sysfs_read, sysfs_write};
 

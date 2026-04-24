@@ -6,8 +6,8 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use crate::config::AppConfig;
 use crate::constants::{PS_BASE, TICK};
 use crate::rgb_settings::{
-    RGB_PARAM_COUNT, RgbState, Setting, SettingKind, is_kb_present, load_settings, send_rgb,
-    write_setting,
+    is_kb_present, load_settings, send_rgb, write_setting, RgbState, Setting, SettingKind,
+    RGB_PARAM_COUNT,
 };
 use crate::system::{cpu_temp, fan_speeds, gpu_temp, thermal_choices};
 use crate::ui::draw;
@@ -328,11 +328,12 @@ impl App {
             term.draw(|f| draw(f, &self))?;
 
             let timeout = TICK.saturating_sub(last.elapsed());
-            if event::poll(timeout)?
-                && let Event::Key(k) = event::read()?
-                && k.kind == KeyEventKind::Press
-            {
-                self.on_key(k);
+            if event::poll(timeout)? {
+                if let Event::Key(k) = event::read()? {
+                    if k.kind == KeyEventKind::Press {
+                        self.on_key(k);
+                    }
+                }
             }
 
             if last.elapsed() >= TICK {

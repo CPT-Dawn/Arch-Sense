@@ -9,8 +9,8 @@ pub mod ui;
 use anyhow::Result;
 
 use app::App;
-use config::{AppConfig, config_path};
-use rgb_settings::{RgbState, is_kb_present, send_rgb};
+use config::{config_path, AppConfig};
+use rgb_settings::{is_kb_present, send_rgb, RgbState};
 
 pub fn run() -> Result<()> {
     let terminal = ratatui::init();

@@ -3,7 +3,7 @@ use std::process::Command;
 
 use anyhow::Result;
 
-use crate::constants::{CPU_TEMP_PATH, PROFILE_CHOICES, ps};
+use crate::constants::{ps, CPU_TEMP_PATH, PROFILE_CHOICES};
 
 pub(crate) fn sysfs_read(path: &str) -> Option<String> {
     fs::read_to_string(path).ok().map(|s| s.trim().to_string())
