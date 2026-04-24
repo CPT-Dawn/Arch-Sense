@@ -115,13 +115,8 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Apply inner padding/margin to the content area
-    let content_area = Layout::vertical([Constraint::Min(0)])
-        .margin(SPACING)
-        .split(inner)[0];
-
     let [brand, indicators] =
-        Layout::horizontal([Constraint::Percentage(56), Constraint::Percentage(44)]).areas(content_area);
+        Layout::horizontal([Constraint::Percentage(56), Constraint::Percentage(44)]).areas(inner);
 
     let uptime = app.boot_started.elapsed().as_secs_f64();
     let boot_marker = if uptime < 1.4 {
@@ -587,15 +582,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Apply inner padding/margin to the content area
-    let content_area = Layout::vertical([Constraint::Min(0)])
-        .margin(SPACING)
-        .split(inner)[0];
-
     let [context, message] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
         .spacing(SPACING)
-        .areas(content_area);
+        .areas(inner);
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
