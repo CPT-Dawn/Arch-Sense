@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -6,15 +7,15 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use crate::config::AppConfig;
 use crate::hardware::{spawn_worker, HardwareEvent, HardwareHandle, HardwareRequest};
 use crate::models::{
-    ControlId, ControlItem, ControlKind, FocusPanel, RgbField, RgbSettings, SensorMetric,
-    SensorSnapshot,
+    ControlId, ControlItem, ControlKind, FanMode, FocusPanel, RgbField, RgbSettings,
+    SensorMetric, SensorSnapshot,
 };
 use crate::permissions::UsbAccess;
 use crate::ui::draw;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(1);
-const HISTORY_LIMIT: usize = 48;
+const HISTORY_LIMIT: usize = 500;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MessageLevel {
@@ -36,7 +37,6 @@ pub(crate) struct AnimatedMetric {
     pub(crate) target: Option<f64>,
     pub(crate) max: f64,
     pub(crate) error: Option<String>,
-    pub(crate) history: Vec<u64>,
 }
 
 impl AnimatedMetric {
@@ -46,25 +46,12 @@ impl AnimatedMetric {
             target: None,
             max,
             error: None,
-            history: Vec::with_capacity(HISTORY_LIMIT),
         }
     }
 
     fn update(&mut self, metric: &SensorMetric) {
         self.target = metric.value;
         self.error = metric.error.clone();
-
-        if let Some(value) = metric.value {
-            let clamped = value.clamp(0.0, self.max).round() as u64;
-            self.history.push(clamped);
-        } else {
-            self.history.push(0);
-        }
-
-        if self.history.len() > HISTORY_LIMIT {
-            let overflow = self.history.len() - HISTORY_LIMIT;
-            self.history.drain(0..overflow);
-        }
     }
 
     fn advance(&mut self, dt: Duration) {
@@ -78,10 +65,6 @@ impl AnimatedMetric {
             self.value = target;
         }
     }
-
-    pub(crate) fn ratio(&self) -> f64 {
-        (self.value / self.max).clamp(0.0, 1.0)
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -90,6 +73,12 @@ pub(crate) struct SensorsState {
     pub(crate) gpu_temp: AnimatedMetric,
     pub(crate) cpu_fan: AnimatedMetric,
     pub(crate) gpu_fan: AnimatedMetric,
+    pub(crate) cpu_temp_history: VecDeque<u64>,
+    pub(crate) gpu_temp_history: VecDeque<u64>,
+    pub(crate) cpu_fan_history: VecDeque<u64>,
+    pub(crate) gpu_fan_history: VecDeque<u64>,
+    pub(crate) cpu_fan_mode: FanMode,
+    pub(crate) gpu_fan_mode: FanMode,
 }
 
 impl SensorsState {
@@ -97,8 +86,14 @@ impl SensorsState {
         Self {
             cpu_temp: AnimatedMetric::new(105.0),
             gpu_temp: AnimatedMetric::new(105.0),
-            cpu_fan: AnimatedMetric::new(100.0),
-            gpu_fan: AnimatedMetric::new(100.0),
+            cpu_fan: AnimatedMetric::new(7000.0),
+            gpu_fan: AnimatedMetric::new(7000.0),
+            cpu_temp_history: VecDeque::with_capacity(HISTORY_LIMIT),
+            gpu_temp_history: VecDeque::with_capacity(HISTORY_LIMIT),
+            cpu_fan_history: VecDeque::with_capacity(HISTORY_LIMIT),
+            gpu_fan_history: VecDeque::with_capacity(HISTORY_LIMIT),
+            cpu_fan_mode: FanMode::Auto,
+            gpu_fan_mode: FanMode::Auto,
         }
     }
 
@@ -107,6 +102,28 @@ impl SensorsState {
         self.gpu_temp.update(&snapshot.gpu_temp);
         self.cpu_fan.update(&snapshot.cpu_fan);
         self.gpu_fan.update(&snapshot.gpu_fan);
+        Self::push_history(
+            &mut self.cpu_temp_history,
+            snapshot.cpu_temp.value,
+            self.cpu_temp.max,
+        );
+        Self::push_history(
+            &mut self.gpu_temp_history,
+            snapshot.gpu_temp.value,
+            self.gpu_temp.max,
+        );
+        Self::push_history(
+            &mut self.cpu_fan_history,
+            snapshot.cpu_fan.value,
+            self.cpu_fan.max,
+        );
+        Self::push_history(
+            &mut self.gpu_fan_history,
+            snapshot.gpu_fan.value,
+            self.gpu_fan.max,
+        );
+        self.cpu_fan_mode = snapshot.cpu_fan_mode;
+        self.gpu_fan_mode = snapshot.gpu_fan_mode;
     }
 
     fn advance(&mut self, dt: Duration) {
@@ -114,6 +131,18 @@ impl SensorsState {
         self.gpu_temp.advance(dt);
         self.cpu_fan.advance(dt);
         self.gpu_fan.advance(dt);
+    }
+
+    fn push_history(history: &mut VecDeque<u64>, value: Option<f64>, max: f64) {
+        let clamped = value
+            .unwrap_or(0.0)
+            .clamp(0.0, max)
+            .round() as u64;
+        history.push_back(clamped);
+
+        while history.len() > HISTORY_LIMIT {
+            let _ = history.pop_front();
+        }
     }
 }
 
@@ -537,7 +566,7 @@ impl App {
             FocusPanel::Controls => self.controls_context(),
             FocusPanel::Rgb => self.rgb_context(),
             FocusPanel::Sensors => {
-                "Gauges animate toward latest readings | r refresh sensors".to_string()
+                "Sparklines show rolling sensor history | r refresh sensors".to_string()
             }
         }
     }

@@ -1,9 +1,11 @@
+use std::collections::VecDeque;
+
 use ratatui::prelude::*;
 use ratatui::symbols;
 use ratatui::widgets::*;
 
 use crate::app::{AnimatedMetric, App, MessageLevel};
-use crate::models::{FocusPanel, Rgb, RgbField, COLOR_PALETTE, RANDOM_COLOR_INDEX};
+use crate::models::{FanMode, FocusPanel, Rgb, RgbField, COLOR_PALETTE, RANDOM_COLOR_INDEX};
 use crate::permissions::UsbAccess;
 use crate::theme::Theme;
 
@@ -456,32 +458,36 @@ fn draw_sensors(frame: &mut Frame, area: Rect, app: &App) {
         cpu_t,
         "CPU Temperature",
         &app.sensors.cpu_temp,
-        "°C",
+        &app.sensors.cpu_temp_history,
         MetricKind::Temp,
+        None,
     );
     draw_metric(
         frame,
         gpu_t,
         "GPU Temperature",
         &app.sensors.gpu_temp,
-        "°C",
+        &app.sensors.gpu_temp_history,
         MetricKind::Temp,
+        None,
     );
     draw_metric(
         frame,
         cpu_f,
         "CPU Fan",
         &app.sensors.cpu_fan,
-        "%",
+        &app.sensors.cpu_fan_history,
         MetricKind::Fan,
+        Some(app.sensors.cpu_fan_mode),
     );
     draw_metric(
         frame,
         gpu_f,
         "GPU Fan",
         &app.sensors.gpu_fan,
-        "%",
+        &app.sensors.gpu_fan_history,
         MetricKind::Fan,
+        Some(app.sensors.gpu_fan_mode),
     );
 }
 
@@ -496,76 +502,114 @@ fn draw_metric(
     area: Rect,
     label: &str,
     metric: &AnimatedMetric,
-    unit: &str,
+    history: &VecDeque<u64>,
     kind: MetricKind,
+    mode: Option<FanMode>,
 ) {
-    if area.height < 3 {
+    if area.height < 2 {
         return;
     }
 
-    let [top, gauge_area, spark_area] = Layout::vertical([
+    let [top, spark_area] = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Min(1),
     ])
-    .spacing(SPACING)
     .areas(area);
 
-    let color = match kind {
-        MetricKind::Temp => Theme::temp_color(metric.value),
-        MetricKind::Fan => Theme::fan_color(metric.value),
-    };
+    let value = metric_value(metric, kind);
+    let color = metric_sample_color(kind, metric.value, metric.max);
 
-    let value = metric_value(metric, unit, kind);
-    let status = if metric.error.is_some() {
-        Span::styled("  N/A", Style::new().fg(Theme::DANGER).bold())
-    } else {
-        Span::styled("  live", Style::new().fg(Theme::SUCCESS))
-    };
+    let mut top_spans = vec![Span::styled(
+        format!(" {label:<17}"),
+        Style::new().fg(Theme::TEXT).bold(),
+    )];
+
+    if let Some(mode) = mode {
+        top_spans.push(Span::styled(
+            format!("{} ", mode.label()),
+            Style::new().fg(fan_mode_color(mode)).bold(),
+        ));
+    }
+
+    top_spans.push(Span::styled(value, Style::new().fg(color).bold()));
+
+    if metric.error.is_some() {
+        top_spans.push(Span::styled(" N/A", Style::new().fg(Theme::DANGER).bold()));
+    }
 
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(format!(" {label:<18}"), Style::new().fg(Theme::TEXT).bold()),
-            Span::styled(value, Style::new().fg(color).bold()),
-            status,
-        ])),
+        Paragraph::new(Line::from(top_spans)),
         top,
     );
 
-    let gauge_style = style_with_bg(
-        Style::new().fg(color).bold(),
-        Theme::SURFACE_ALT
-    );
-    let gauge = Gauge::default()
-        .ratio(metric.ratio())
-        .gauge_style(gauge_style)
-        .style(style_with_bg(Style::new(), Theme::SURFACE))
-        .label("");
-    frame.render_widget(gauge, gauge_area);
+    let width = spark_area.width.max(1) as usize;
+    let mut data = visible_history(history, width);
+    if data.is_empty() {
+        data = vec![0; width];
+    }
 
-    let data = if metric.history.is_empty() {
-        vec![0]
+    let bar_color = if metric.error.is_some() {
+        Theme::SUBTLE
     } else {
-        metric.history.clone()
+        color
     };
+
+    let bars = data
+        .into_iter()
+        .map(|value| {
+            let sample_color = if metric.error.is_some() {
+                bar_color
+            } else {
+                metric_sample_color(kind, value as f64, metric.max)
+            };
+            SparklineBar::from(value).style(Some(Style::new().fg(sample_color)))
+        })
+        .collect::<Vec<_>>();
+
     let sparkline = Sparkline::default()
-        .data(data)
+        .data(bars)
         .max(metric.max.round() as u64)
         .bar_set(symbols::bar::NINE_LEVELS)
-        .style(style_with_bg(Style::new().fg(color), Theme::SURFACE));
+        .style(style_with_bg(Style::new(), Theme::SURFACE));
     frame.render_widget(sparkline, spark_area);
 }
 
-fn metric_value(metric: &AnimatedMetric, unit: &str, kind: MetricKind) -> String {
+fn metric_value(metric: &AnimatedMetric, kind: MetricKind) -> String {
     if metric.target.is_none() {
         return "N/A".to_string();
     }
 
-    if matches!(kind, MetricKind::Fan) && metric.target == Some(0.0) {
-        "Auto".to_string()
-    } else {
-        format!("{:.0}{unit}", metric.value)
+    match kind {
+        MetricKind::Temp => format!("{:.0}°C", metric.value),
+        MetricKind::Fan => format!("{:.0} RPM", metric.value),
     }
+}
+
+fn metric_sample_color(kind: MetricKind, value: f64, max: f64) -> Color {
+    match kind {
+        MetricKind::Temp => Theme::temp_color(value),
+        MetricKind::Fan => Theme::fan_rpm_color(value, max),
+    }
+}
+
+fn fan_mode_color(mode: FanMode) -> Color {
+    match mode {
+        FanMode::Auto => Theme::MUTED,
+        FanMode::Max => Theme::WARNING,
+    }
+}
+
+fn visible_history(history: &VecDeque<u64>, width: usize) -> Vec<u64> {
+    if width == 0 {
+        return Vec::new();
+    }
+
+    let keep = width.min(history.len());
+    history
+        .iter()
+        .skip(history.len().saturating_sub(keep))
+        .copied()
+        .collect()
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {

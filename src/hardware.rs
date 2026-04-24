@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -12,10 +12,34 @@ use crate::constants::{
     PS_BASE, SPEED_HW_FAST, SPEED_HW_SLOW, USB_TIMEOUT,
 };
 use crate::models::{
-    ControlChoice, ControlId, ControlItem, ControlKind, Rgb, RgbSettings, SensorMetric,
-    SensorSnapshot, OFF_EFFECT_INDEX, RANDOM_COLOR_INDEX,
+    ControlChoice, ControlId, ControlItem, ControlKind, FanMode, Rgb, RgbSettings,
+    SensorMetric, SensorSnapshot, OFF_EFFECT_INDEX, RANDOM_COLOR_INDEX,
 };
 use crate::permissions::{keyboard_access, keyboard_present, open_keyboard, setup_hint, UsbAccess};
+
+const HWMON_BASE: &str = "/sys/class/hwmon";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SensorRole {
+    Cpu,
+    Gpu,
+}
+
+#[derive(Clone, Debug)]
+struct HwmonFanSample {
+    hwmon_name: String,
+    label: Option<String>,
+    rpm: u64,
+    pwm: Option<u64>,
+    pwm_max: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+struct HwmonTempSample {
+    hwmon_name: String,
+    label: Option<String>,
+    celsius: f64,
+}
 
 #[derive(Debug)]
 pub(crate) enum HardwareRequest {
@@ -140,28 +164,65 @@ fn hardware_note(module_loaded: bool, sensors: &SensorSnapshot) -> Option<String
 }
 
 fn read_sensors() -> SensorSnapshot {
-    let (cpu_fan, gpu_fan) = read_fan_speeds();
+    let (cpu_fan, gpu_fan, cpu_fan_mode, gpu_fan_mode) = read_fan_telemetry();
 
     SensorSnapshot {
         cpu_temp: read_cpu_temp(),
         gpu_temp: read_gpu_temp(),
         cpu_fan,
         gpu_fan,
+        cpu_fan_mode,
+        gpu_fan_mode,
     }
 }
 
 fn read_cpu_temp() -> SensorMetric {
+    let hwmon = read_hwmon_temperature(SensorRole::Cpu);
+    if let Ok(value) = hwmon {
+        return SensorMetric::available(value);
+    }
+
+    let hwmon_error = hwmon.err().map(|error| error.to_string());
+
     match read_sysfs(CPU_TEMP_PATH).and_then(|raw| {
         raw.parse::<f64>()
             .map(|value| value / 1000.0)
             .with_context(|| format!("parsing CPU temperature from {CPU_TEMP_PATH}: {raw}"))
     }) {
         Ok(value) => SensorMetric::available(value),
-        Err(error) => SensorMetric::unavailable(format!("CPU temperature unavailable: {error}")),
+        Err(error) => {
+            let detail = match hwmon_error {
+                Some(hwmon_error) => {
+                    format!("hwmon: {hwmon_error}; thermal zone: {error}")
+                }
+                None => error.to_string(),
+            };
+            SensorMetric::unavailable(format!("CPU temperature unavailable: {detail}"))
+        }
     }
 }
 
 fn read_gpu_temp() -> SensorMetric {
+    let hwmon = read_hwmon_temperature(SensorRole::Gpu);
+    if let Ok(value) = hwmon {
+        return SensorMetric::available(value);
+    }
+
+    let hwmon_error = hwmon.err().map(|error| error.to_string());
+
+    match read_gpu_temp_from_nvidia_smi() {
+        Ok(value) => SensorMetric::available(value),
+        Err(error) => {
+            let detail = match hwmon_error {
+                Some(hwmon_error) => format!("hwmon: {hwmon_error}; nvidia-smi: {error}"),
+                None => error.to_string(),
+            };
+            SensorMetric::unavailable(format!("GPU temperature unavailable: {detail}"))
+        }
+    }
+}
+
+fn read_gpu_temp_from_nvidia_smi() -> Result<f64> {
     match Command::new("nvidia-smi")
         .args([
             "--query-gpu=temperature.gpu",
@@ -171,12 +232,9 @@ fn read_gpu_temp() -> SensorMetric {
     {
         Ok(output) if output.status.success() => {
             let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            match raw.parse::<f64>() {
-                Ok(value) => SensorMetric::available(value),
-                Err(error) => SensorMetric::unavailable(format!(
-                    "GPU temperature parse failed from nvidia-smi output '{raw}': {error}"
-                )),
-            }
+            raw.parse::<f64>().with_context(|| {
+                format!("parsing GPU temperature from nvidia-smi output '{raw}'")
+            })
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -185,49 +243,354 @@ fn read_gpu_temp() -> SensorMetric {
             } else {
                 format!("nvidia-smi failed: {stderr}")
             };
-            SensorMetric::unavailable(format!("GPU temperature unavailable: {detail}"))
+            bail!("{detail}")
         }
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            SensorMetric::unavailable("GPU temperature unavailable: nvidia-smi not installed")
+            bail!("nvidia-smi is not installed")
         }
-        Err(error) => SensorMetric::unavailable(format!(
-            "GPU temperature unavailable: starting nvidia-smi failed: {error}"
-        )),
+        Err(error) => bail!("starting nvidia-smi failed: {error}"),
     }
 }
 
-fn read_fan_speeds() -> (SensorMetric, SensorMetric) {
-    let path = ps("fan_speed");
-    match read_sysfs(&path) {
-        Ok(raw) => {
-            let parts: Vec<&str> = raw.split(',').collect();
-            let parse = |index: usize, label: &str| {
-                parts
-                    .get(index)
-                    .ok_or_else(|| anyhow::anyhow!("{label} fan value missing in '{raw}'"))
-                    .and_then(|part| {
-                        part.trim()
-                            .parse::<f64>()
-                            .with_context(|| format!("parsing {label} fan percentage from '{raw}'"))
-                    })
-            };
-
-            let cpu = parse(0, "CPU")
-                .map(SensorMetric::available)
-                .unwrap_or_else(|error| SensorMetric::unavailable(error.to_string()));
-            let gpu = parse(1, "GPU")
-                .map(SensorMetric::available)
-                .unwrap_or_else(|error| SensorMetric::unavailable(error.to_string()));
-            (cpu, gpu)
-        }
+fn read_fan_telemetry() -> (SensorMetric, SensorMetric, FanMode, FanMode) {
+    let linuwu_modes = read_linuwu_fan_modes();
+    let samples = match collect_hwmon_fan_samples() {
+        Ok(samples) => samples,
         Err(error) => {
-            let message = format!("fan telemetry unavailable: {error}");
-            (
-                SensorMetric::unavailable(message.clone()),
-                SensorMetric::unavailable(message),
+            let message = format!("hwmon fan discovery failed: {error}");
+            return (
+                SensorMetric::unavailable(format!("CPU fan RPM unavailable: {message}")),
+                SensorMetric::unavailable(format!("GPU fan RPM unavailable: {message}")),
+                linuwu_modes.map(|(cpu, _)| cpu).unwrap_or(FanMode::Auto),
+                linuwu_modes.map(|(_, gpu)| gpu).unwrap_or(FanMode::Auto),
+            );
+        }
+    };
+
+    let (cpu_idx, gpu_idx) = select_fan_sample_indices(&samples);
+
+    let cpu_fan = cpu_idx
+        .and_then(|index| samples.get(index))
+        .map(|sample| SensorMetric::available(sample.rpm as f64))
+        .unwrap_or_else(|| {
+            SensorMetric::unavailable(
+                "CPU fan RPM unavailable: no matching fan*_input under /sys/class/hwmon",
             )
+        });
+
+    let gpu_fan = gpu_idx
+        .and_then(|index| samples.get(index))
+        .map(|sample| SensorMetric::available(sample.rpm as f64))
+        .unwrap_or_else(|| {
+            SensorMetric::unavailable(
+                "GPU fan RPM unavailable: no matching fan*_input under /sys/class/hwmon",
+            )
+        });
+
+    let cpu_mode = linuwu_modes
+        .map(|(cpu, _)| cpu)
+        .or_else(|| {
+            cpu_idx
+                .and_then(|index| samples.get(index))
+                .map(mode_from_hwmon_sample)
+        })
+        .unwrap_or(FanMode::Auto);
+
+    let gpu_mode = linuwu_modes
+        .map(|(_, gpu)| gpu)
+        .or_else(|| {
+            gpu_idx
+                .and_then(|index| samples.get(index))
+                .map(mode_from_hwmon_sample)
+        })
+        .unwrap_or(FanMode::Auto);
+
+    (cpu_fan, gpu_fan, cpu_mode, gpu_mode)
+}
+
+fn read_linuwu_fan_modes() -> Option<(FanMode, FanMode)> {
+    let raw = read_sysfs(&ps("fan_speed")).ok()?;
+    let parts: Vec<&str> = raw.split(',').collect();
+
+    let parse_mode = |index: usize| -> Option<FanMode> {
+        let value = parts.get(index)?.trim().parse::<f64>().ok()?;
+        Some(if value >= 100.0 {
+            FanMode::Max
+        } else {
+            FanMode::Auto
+        })
+    };
+
+    Some((parse_mode(0)?, parse_mode(1)?))
+}
+
+fn select_fan_sample_indices(samples: &[HwmonFanSample]) -> (Option<usize>, Option<usize>) {
+    if samples.is_empty() {
+        return (None, None);
+    }
+
+    let cpu = best_fan_index(samples, SensorRole::Cpu, None).or(Some(0));
+    let gpu = best_fan_index(samples, SensorRole::Gpu, cpu).or_else(|| {
+        samples
+            .iter()
+            .enumerate()
+            .find(|(index, _)| Some(*index) != cpu)
+            .map(|(index, _)| index)
+    });
+
+    (cpu, gpu)
+}
+
+fn best_fan_index(
+    samples: &[HwmonFanSample],
+    role: SensorRole,
+    exclude: Option<usize>,
+) -> Option<usize> {
+    samples
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| Some(*index) != exclude)
+        .max_by_key(|(_, sample)| (fan_score(sample, role), sample.rpm))
+        .map(|(index, _)| index)
+}
+
+fn fan_score(sample: &HwmonFanSample, role: SensorRole) -> i32 {
+    let label = sample.label.as_deref().unwrap_or("");
+    let haystack = format!("{} {label}", sample.hwmon_name).to_ascii_lowercase();
+    let mut score = 0;
+
+    if contains_any(&haystack, role_keywords(role)) {
+        score += 6;
+    }
+
+    match role {
+        SensorRole::Cpu => {
+            if contains_any(&haystack, &["package", "tctl", "tdie", "coretemp", "cpu"])
+            {
+                score += 4;
+            }
+            if contains_any(&haystack, &["gpu", "amdgpu", "nouveau", "nvidia"]) {
+                score -= 4;
+            }
+        }
+        SensorRole::Gpu => {
+            if contains_any(&haystack, &["gpu", "edge", "junction", "amdgpu", "nvidia"])
+            {
+                score += 4;
+            }
+            if contains_any(&haystack, &["cpu", "package", "coretemp"]) {
+                score -= 4;
+            }
         }
     }
+
+    score
+}
+
+fn mode_from_hwmon_sample(sample: &HwmonFanSample) -> FanMode {
+    if let Some(pwm) = sample.pwm {
+        let pwm_max = sample.pwm_max.unwrap_or(255);
+        if pwm_max > 0 && pwm >= pwm_max.saturating_sub(1) {
+            return FanMode::Max;
+        }
+    }
+
+    FanMode::Auto
+}
+
+fn collect_hwmon_fan_samples() -> Result<Vec<HwmonFanSample>> {
+    let mut samples = Vec::new();
+
+    for hwmon_dir in list_hwmon_dirs()? {
+        let hwmon_name = read_optional_string(&hwmon_dir.join("name"))
+            .unwrap_or_else(|| "unknown".to_string());
+        let entries = match fs::read_dir(&hwmon_dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            let Some(index) = parse_indexed_attr(&file_name, "fan", "_input") else {
+                continue;
+            };
+
+            let fan_path = hwmon_dir.join(format!("fan{index}_input"));
+            let Some(rpm) = read_optional_u64(&fan_path) else {
+                continue;
+            };
+
+            let label = read_optional_string(&hwmon_dir.join(format!("fan{index}_label")));
+            let pwm = read_optional_u64(&hwmon_dir.join(format!("pwm{index}")));
+            let pwm_max = read_optional_u64(&hwmon_dir.join(format!("pwm{index}_max")))
+                .or(if pwm.is_some() { Some(255) } else { None });
+
+            samples.push(HwmonFanSample {
+                hwmon_name: hwmon_name.clone(),
+                label,
+                rpm,
+                pwm,
+                pwm_max,
+            });
+        }
+    }
+
+    Ok(samples)
+}
+
+fn read_hwmon_temperature(role: SensorRole) -> Result<f64> {
+    let samples = collect_hwmon_temp_samples()?;
+    let Some(index) = best_temp_index(&samples, role) else {
+        bail!(
+            "no temp*_input match for {} role in {HWMON_BASE}",
+            match role {
+                SensorRole::Cpu => "CPU",
+                SensorRole::Gpu => "GPU",
+            }
+        );
+    };
+
+    Ok(samples[index].celsius)
+}
+
+fn collect_hwmon_temp_samples() -> Result<Vec<HwmonTempSample>> {
+    let mut samples = Vec::new();
+
+    for hwmon_dir in list_hwmon_dirs()? {
+        let hwmon_name = read_optional_string(&hwmon_dir.join("name"))
+            .unwrap_or_else(|| "unknown".to_string());
+        let entries = match fs::read_dir(&hwmon_dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            let Some(index) = parse_indexed_attr(&file_name, "temp", "_input") else {
+                continue;
+            };
+
+            let temp_path = hwmon_dir.join(format!("temp{index}_input"));
+            let Some(raw) = read_optional_string(&temp_path) else {
+                continue;
+            };
+            let Ok(raw_value) = raw.parse::<f64>() else {
+                continue;
+            };
+
+            let celsius = if raw_value.abs() > 1000.0 {
+                raw_value / 1000.0
+            } else {
+                raw_value
+            };
+
+            if !(-40.0..=130.0).contains(&celsius) {
+                continue;
+            }
+
+            let label = read_optional_string(&hwmon_dir.join(format!("temp{index}_label")));
+            samples.push(HwmonTempSample {
+                hwmon_name: hwmon_name.clone(),
+                label,
+                celsius,
+            });
+        }
+    }
+
+    Ok(samples)
+}
+
+fn best_temp_index(samples: &[HwmonTempSample], role: SensorRole) -> Option<usize> {
+    samples
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, sample)| temperature_score(sample, role))
+        .map(|(index, _)| index)
+}
+
+fn temperature_score(sample: &HwmonTempSample, role: SensorRole) -> i32 {
+    let label = sample.label.as_deref().unwrap_or("");
+    let haystack = format!("{} {label}", sample.hwmon_name).to_ascii_lowercase();
+    let mut score = 0;
+
+    if contains_any(&haystack, role_keywords(role)) {
+        score += 6;
+    }
+
+    match role {
+        SensorRole::Cpu => {
+            if contains_any(&haystack, &["package", "tctl", "tdie", "coretemp", "cpu"]) {
+                score += 4;
+            }
+            if contains_any(&haystack, &["gpu", "amdgpu", "nouveau", "nvidia"]) {
+                score -= 4;
+            }
+        }
+        SensorRole::Gpu => {
+            if contains_any(&haystack, &["gpu", "edge", "junction", "amdgpu", "nvidia"])
+            {
+                score += 4;
+            }
+            if contains_any(&haystack, &["cpu", "package", "coretemp"]) {
+                score -= 4;
+            }
+        }
+    }
+
+    score
+}
+
+fn role_keywords(role: SensorRole) -> &'static [&'static str] {
+    match role {
+        SensorRole::Cpu => &["cpu", "coretemp", "k10temp", "x86_pkg_temp", "acpitz"],
+        SensorRole::Gpu => &["gpu", "amdgpu", "nouveau", "nvidia", "radeon"],
+    }
+}
+
+fn contains_any(haystack: &str, keywords: &[&str]) -> bool {
+    keywords.iter().any(|keyword| haystack.contains(keyword))
+}
+
+fn read_optional_string(path: &Path) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn read_optional_u64(path: &Path) -> Option<u64> {
+    read_optional_string(path).and_then(|value| value.parse::<u64>().ok())
+}
+
+fn parse_indexed_attr(name: &str, prefix: &str, suffix: &str) -> Option<usize> {
+    if !name.starts_with(prefix) || !name.ends_with(suffix) {
+        return None;
+    }
+
+    let start = prefix.len();
+    let end = name.len().saturating_sub(suffix.len());
+    if start >= end {
+        return None;
+    }
+
+    name[start..end].parse::<usize>().ok()
+}
+
+fn list_hwmon_dirs() -> Result<Vec<PathBuf>> {
+    let mut dirs = Vec::new();
+
+    for entry in fs::read_dir(HWMON_BASE).with_context(|| format!("reading {HWMON_BASE}"))? {
+        let entry = entry.with_context(|| format!("reading entries in {HWMON_BASE}"))?;
+        let path = entry.path();
+        if path.is_dir() {
+            dirs.push(path);
+        }
+    }
+
+    dirs.sort();
+    Ok(dirs)
 }
 
 pub(crate) fn load_controls() -> Vec<ControlItem> {
