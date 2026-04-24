@@ -1,638 +1,587 @@
 use ratatui::prelude::*;
+use ratatui::symbols;
 use ratatui::widgets::*;
 
-use crate::app::{App, Tab};
+use crate::app::{AnimatedMetric, App, MessageLevel};
+use crate::models::{FocusPanel, Rgb, RgbField, COLOR_PALETTE, RANDOM_COLOR_INDEX};
 use crate::permissions::UsbAccess;
-use crate::rgb_settings::{SettingKind, COLOR_PALETTE, EFFECTS, RANDOM_COLOR_IDX};
 use crate::theme::Theme;
 
-pub(crate) fn draw(f: &mut Frame, app: &App) {
-    let [header, tab_bar, body, detail, status] = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Length(1),
-        Constraint::Min(12),
-        Constraint::Length(6),
-        Constraint::Length(3),
+pub(crate) fn draw(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    frame.render_widget(Block::new().style(Style::new().bg(Theme::BG)), area);
+
+    let [header, body, footer] = Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Min(18),
+        Constraint::Length(4),
     ])
-    .areas(f.area());
+    .margin(1)
+    .areas(area);
 
-    draw_header(f, header);
-    draw_tab_bar(f, tab_bar, app);
+    draw_header(frame, header, app);
+    draw_body(frame, body, app);
+    draw_footer(frame, footer, app);
+}
 
-    let [left, right] =
-        Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).areas(body);
+fn draw_body(frame: &mut Frame, area: Rect, app: &App) {
+    let [left, _, right] = Layout::horizontal([
+        Constraint::Percentage(42),
+        Constraint::Length(1),
+        Constraint::Percentage(58),
+    ])
+    .areas(area);
 
-    draw_sensors(f, left, app);
+    let [controls, _, rgb] = Layout::vertical([
+        Constraint::Percentage(58),
+        Constraint::Length(1),
+        Constraint::Percentage(42),
+    ])
+    .areas(left);
 
-    match app.tab {
-        Tab::System => {
-            draw_controls(f, right, app);
-            draw_detail(f, detail, app);
-        }
-        Tab::Rgb => {
-            draw_rgb_panel(f, right, app);
-            draw_rgb_detail(f, detail, app);
-        }
+    draw_controls(frame, controls, app);
+    draw_rgb(frame, rgb, app);
+    draw_sensors(frame, right, app);
+}
+
+fn panel_block<'a>(title: &'a str, panel: FocusPanel, app: &App) -> Block<'a> {
+    let focused = app.focus == panel;
+    let border = if focused {
+        pulse_color(app, Theme::ACCENT, Theme::ACCENT_2)
+    } else {
+        Theme::BORDER_MUTED
+    };
+
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(border))
+        .style(Style::new().bg(Theme::SURFACE))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::new()
+                .fg(if focused { Theme::TEXT } else { Theme::MUTED })
+                .bold(),
+        ))
+}
+
+fn pulse_color(app: &App, base: Color, pulse: Color) -> Color {
+    if app.focus_pulse <= 0.01 {
+        return base;
     }
 
-    draw_status(f, status, app);
+    let mix = app.focus_pulse.clamp(0.0, 1.0);
+    blend(base, pulse, mix)
 }
 
-// ─── Header ─────────────────────────────────────────────────────────────────
+fn blend(a: Color, b: Color, mix: f64) -> Color {
+    let (Color::Rgb(ar, ag, ab), Color::Rgb(br, bg, bb)) = (a, b) else {
+        return a;
+    };
 
-fn draw_header(f: &mut Frame, area: Rect) {
+    let channel = |from: u8, to: u8| (from as f64 + (to as f64 - from as f64) * mix).round() as u8;
+
+    Color::Rgb(channel(ar, br), channel(ag, bg), channel(ab, bb))
+}
+
+fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::bordered()
-        .border_type(BorderType::Double)
-        .border_style(Style::new().fg(Theme::ACCENT))
-        .style(Style::new().bg(Theme::BG_HEADER));
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(Theme::BORDER))
+        .style(Style::new().bg(Theme::SURFACE));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    let text = Line::from(vec![
-        Span::styled("  ◆ ", Style::new().fg(Theme::ACCENT).bold()),
-        Span::styled("A R C H - S E N S E", Style::new().fg(Theme::ACCENT).bold()),
-        Span::styled("  ◆  ", Style::new().fg(Theme::ACCENT)),
-        Span::styled(
-            "Acer Predator Control Center",
-            Style::new().fg(Theme::FG_DIM),
-        ),
-    ])
-    .centered();
+    let [brand, indicators] =
+        Layout::horizontal([Constraint::Percentage(56), Constraint::Percentage(44)]).areas(inner);
 
-    f.render_widget(Paragraph::new(text).block(block), area);
-}
-
-// ─── Tab Bar ────────────────────────────────────────────────────────────────
-
-fn draw_tab_bar(f: &mut Frame, area: Rect, app: &App) {
-    let sys = if app.tab == Tab::System {
-        Style::new().fg(Color::Black).bg(Theme::ACCENT).bold()
+    let uptime = app.boot_started.elapsed().as_secs_f64();
+    let boot_marker = if uptime < 1.4 {
+        let dots = ((uptime * 8.0) as usize % 4) + 1;
+        format!(" {}", "•".repeat(dots))
     } else {
-        Style::new().fg(Theme::FG_DIM)
-    };
-    let rgb = if app.tab == Tab::Rgb {
-        Style::new().fg(Color::Black).bg(Theme::ACCENT).bold()
-    } else {
-        Style::new().fg(Theme::FG_DIM)
+        String::new()
     };
 
-    let line = Line::from(vec![
-        Span::raw("  "),
-        Span::styled(" F1 System ", sys),
-        Span::raw("  "),
-        Span::styled(" F2 Keyboard RGB ", rgb),
-        Span::styled(
-            "                              Tab to switch",
-            Style::new().fg(Theme::DARK),
+    let brand_line = Line::from(vec![
+        Span::styled("ARCH-SENSE", Style::new().fg(Theme::TEXT).bold()),
+        Span::styled("  Control Center", Style::new().fg(Theme::MUTED)),
+        Span::styled(boot_marker, Style::new().fg(Theme::ACCENT)),
+    ]);
+    frame.render_widget(Paragraph::new(brand_line), brand);
+
+    let indicators_line = Line::from(vec![
+        badge(
+            "MODULE",
+            if app.module_loaded {
+                "READY"
+            } else {
+                "OFFLINE"
+            },
+            if app.module_loaded {
+                Theme::SUCCESS
+            } else {
+                Theme::DANGER
+            },
         ),
+        Span::raw(" "),
+        badge(
+            "KB",
+            keyboard_label(&app.keyboard),
+            keyboard_color(&app.keyboard),
+        ),
+        Span::raw(" "),
+        badge("FOCUS", app.focus.label(), Theme::ACCENT),
     ]);
 
-    f.render_widget(Paragraph::new(line), area);
+    frame.render_widget(
+        Paragraph::new(indicators_line).alignment(Alignment::Right),
+        indicators,
+    );
 }
 
-// ─── Sensor Bars ────────────────────────────────────────────────────────────
-
-fn make_bar(val: f64, max: f64, w: u16) -> Line<'static> {
-    let ratio = (val / max).clamp(0.0, 1.0);
-    let fill = (ratio * w as f64) as usize;
-    let empty = (w as usize).saturating_sub(fill);
-    let color = if ratio < 0.55 {
-        Theme::COOL
-    } else if ratio < 0.78 {
-        Theme::WARM
-    } else {
-        Theme::HOT
-    };
-    Line::from(vec![
-        Span::raw("  "),
-        Span::styled("━".repeat(fill), Style::new().fg(color)),
-        Span::styled("─".repeat(empty), Style::new().fg(Theme::DARK)),
-    ])
+fn badge<'a>(label: &'a str, value: &'a str, color: Color) -> Span<'a> {
+    Span::styled(
+        format!(" {label}:{value} "),
+        Style::new().fg(color).bg(Theme::ELEVATED).bold(),
+    )
 }
 
-// ─── Sensors Panel ──────────────────────────────────────────────────────────
+fn keyboard_label(access: &UsbAccess) -> &'static str {
+    match access {
+        UsbAccess::Accessible => "READY",
+        UsbAccess::PermissionDenied => "LOCKED",
+        UsbAccess::NotFound => "MISSING",
+        UsbAccess::Error(_) => "ERROR",
+    }
+}
 
-fn draw_sensors(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(Theme::DIM))
-        .title(Span::styled(
-            " Sensors ",
-            Style::new().fg(Theme::ACCENT).bold(),
-        ));
+fn keyboard_color(access: &UsbAccess) -> Color {
+    match access {
+        UsbAccess::Accessible => Theme::SUCCESS,
+        UsbAccess::PermissionDenied => Theme::WARNING,
+        UsbAccess::NotFound => Theme::WARNING,
+        UsbAccess::Error(_) => Theme::DANGER,
+    }
+}
 
+fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
+    let block = panel_block("Controls", FocusPanel::Controls, app);
     let inner = block.inner(area);
-    f.render_widget(block, area);
-    let bar_w = inner.width.saturating_sub(4);
+    frame.render_widget(block, area);
 
-    let sl = |label: &str, val: String, color: Color| -> Line<'static> {
-        Line::from(vec![
-            Span::styled(format!("  {:<18}", label), Style::new().fg(Theme::FG)),
-            Span::styled(val, Style::new().fg(color).bold()),
-        ])
-    };
-
-    let cpu_t = app.sensors.cpu_t.unwrap_or(0.0);
-    let cpu_s = app
-        .sensors
-        .cpu_t
-        .map(|t| format!("{t:.0}°C"))
-        .unwrap_or("N/A".into());
-    let cpu_c = app
-        .sensors
-        .cpu_t
-        .map(Theme::temp_color)
-        .unwrap_or(Theme::FG_DIM);
-
-    let gpu_t = app.sensors.gpu_t.unwrap_or(0.0);
-    let gpu_s = app
-        .sensors
-        .gpu_t
-        .map(|t| format!("{t:.0}°C"))
-        .unwrap_or("N/A".into());
-    let gpu_c = app
-        .sensors
-        .gpu_t
-        .map(Theme::temp_color)
-        .unwrap_or(Theme::FG_DIM);
-
-    let cf = app.sensors.cpu_f.unwrap_or(0);
-    let cf_s = app
-        .sensors
-        .cpu_f
-        .map(|p| {
-            if p == 0 {
-                "Auto".into()
-            } else {
-                format!("{p}%")
-            }
-        })
-        .unwrap_or("N/A".into());
-    let cf_c = app
-        .sensors
-        .cpu_f
-        .map(Theme::fan_color)
-        .unwrap_or(Theme::FG_DIM);
-
-    let gf = app.sensors.gpu_f.unwrap_or(0);
-    let gf_s = app
-        .sensors
-        .gpu_f
-        .map(|p| {
-            if p == 0 {
-                "Auto".into()
-            } else {
-                format!("{p}%")
-            }
-        })
-        .unwrap_or("N/A".into());
-    let gf_c = app
-        .sensors
-        .gpu_f
-        .map(Theme::fan_color)
-        .unwrap_or(Theme::FG_DIM);
-
-    let lines = vec![
-        sl("CPU Temperature", cpu_s, cpu_c),
-        make_bar(cpu_t, 105.0, bar_w),
-        Line::default(),
-        sl("GPU Temperature", gpu_s, gpu_c),
-        make_bar(gpu_t, 105.0, bar_w),
-        Line::default(),
-        sl("CPU Fan", cf_s, cf_c),
-        make_bar(cf as f64, 100.0, bar_w),
-        Line::default(),
-        sl("GPU Fan", gf_s, gf_c),
-        make_bar(gf as f64, 100.0, bar_w),
-    ];
-
-    f.render_widget(Paragraph::new(lines), inner);
-}
-
-// ─── Controls Panel ─────────────────────────────────────────────────────────
-
-fn draw_controls(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(Theme::DIM))
-        .title(Span::styled(
-            " Controls ",
-            Style::new().fg(Theme::ACCENT).bold(),
-        ));
-
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if app.settings.is_empty() {
-        f.render_widget(
-            Paragraph::new("No settings available")
-                .style(Style::new().fg(Theme::FG_DIM))
-                .centered(),
+    if app.controls.is_empty() {
+        frame.render_widget(
+            Paragraph::new(" Waiting for hardware controls...")
+                .style(Style::new().fg(Theme::MUTED))
+                .alignment(Alignment::Center),
             inner,
         );
         return;
     }
 
-    let rows: Vec<Row> = app
-        .settings
+    let rows = app
+        .controls
         .iter()
         .enumerate()
-        .map(|(i, s)| {
-            let sel = i == app.ctrl_sel;
-            let arrow = if sel { " ▸ " } else { "   " };
-            let style = if sel {
-                Style::new().fg(Theme::ACCENT).bg(Theme::BG_HL).bold()
+        .map(|(index, item)| {
+            let selected = app.focus == FocusPanel::Controls && index == app.selected_control;
+            let pending = item.pending.is_some();
+            let error = item.last_error.is_some();
+            let base_style = if selected {
+                Style::new().fg(Theme::TEXT).bg(Theme::ELEVATED).bold()
             } else {
-                Style::new().fg(Theme::FG)
+                Style::new().fg(Theme::TEXT)
             };
-
-            // Show pending preview if cycling, else show current
-            let disp = if let Some(pidx) = s.pending {
-                if let SettingKind::Cycle(ref opts) = s.kind {
-                    opts.get(pidx)
-                        .map(|o| format!("◀ {} ▶", o.label))
-                        .unwrap_or(s.display.clone())
+            let value_style = if error {
+                Style::new().fg(Theme::DANGER).bg(if selected {
+                    Theme::ELEVATED
                 } else {
-                    s.display.clone()
-                }
+                    Theme::SURFACE
+                })
+            } else if pending {
+                Style::new()
+                    .fg(Theme::WARNING)
+                    .bg(if selected {
+                        Theme::ELEVATED
+                    } else {
+                        Theme::SURFACE
+                    })
+                    .bold()
             } else {
-                s.display.clone()
+                Style::new().fg(Theme::ACCENT)
             };
-
-            let val_style = if sel && s.pending.is_some() {
-                Style::new().fg(Theme::WARM).bg(Theme::BG_HL).bold()
-            } else if sel {
-                Style::new().fg(Theme::ACCENT2).bg(Theme::BG_HL).bold()
+            let marker = if selected { "▸" } else { " " };
+            let state = if app.control_pending == Some(item.id) {
+                "APPLY"
+            } else if pending {
+                "PREVIEW"
+            } else if error {
+                "ERROR"
             } else {
-                Style::new().fg(Theme::DIM)
-            };
-
-            let hint = match (&s.kind, sel) {
-                (SettingKind::Toggle, true) => " [Enter]",
-                (SettingKind::Cycle(_), true) if s.pending.is_some() => " [Enter]",
-                (SettingKind::Cycle(_), true) => " [←→]",
-                _ => "",
+                ""
             };
 
             Row::new(vec![
-                Cell::new(arrow).style(style),
-                Cell::new(format!("{:<20}", s.label)).style(style),
-                Cell::new(disp).style(val_style),
-                Cell::new(hint).style(Style::new().fg(Theme::FG_DIM)),
+                Cell::from(marker).style(base_style),
+                Cell::from(item.label()).style(base_style),
+                Cell::from(item.visible_value()).style(value_style),
+                Cell::from(state).style(Style::new().fg(Theme::SUBTLE)),
             ])
         })
-        .collect();
+        .collect::<Vec<_>>();
 
     let widths = [
-        Constraint::Length(3),
-        Constraint::Length(21),
-        Constraint::Min(14),
-        Constraint::Length(9),
+        Constraint::Length(2),
+        Constraint::Percentage(42),
+        Constraint::Percentage(38),
+        Constraint::Length(8),
     ];
 
-    f.render_widget(Table::new(rows, widths).column_spacing(0), inner);
+    frame.render_widget(Table::new(rows, widths).column_spacing(1), inner);
 }
 
-// ─── RGB Panel ──────────────────────────────────────────────────────────────
-
-fn draw_rgb_panel(f: &mut Frame, area: Rect, app: &App) {
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(Theme::DIM))
-        .title(Span::styled(
-            " Keyboard RGB ",
-            Style::new().fg(Theme::ACCENT).bold(),
-        ));
-
+fn draw_rgb(frame: &mut Frame, area: Rect, app: &App) {
+    let block = panel_block("Keyboard RGB", FocusPanel::Rgb, app);
     let inner = block.inner(area);
-    f.render_widget(block, area);
+    frame.render_widget(block, area);
 
-    if !app.rgb.kb_found {
-        let msg = vec![
-            Line::default(),
-            Line::from(Span::styled(
-                "  ⚠ No compatible keyboard detected",
-                Style::new().fg(Theme::WARM),
-            )),
-            Line::from(Span::styled(
-                "    Expected: Acer Predator PH16-71 (04F2:0117)",
-                Style::new().fg(Theme::FG_DIM),
-            )),
-            Line::default(),
-            Line::from(Span::styled(
-                "    Config can still be edited & saved.",
-                Style::new().fg(Theme::DIM),
-            )),
-            Line::from(Span::styled(
-                "    Keyboard will be detected when plugged in.",
-                Style::new().fg(Theme::DIM),
-            )),
-        ];
-        f.render_widget(Paragraph::new(msg), inner);
-        return;
-    }
+    let [rows_area, palette_area, preview_area] = Layout::vertical([
+        Constraint::Min(5),
+        Constraint::Length(1),
+        Constraint::Length(2),
+    ])
+    .areas(inner);
 
-    let eff = app.rgb.eff();
-    let bar_w: usize = 20;
-
-    let mk_row = |idx: usize, label: &str, spans: Vec<Span<'static>>| -> Vec<Line<'static>> {
-        let sel = idx == app.rgb.sel;
-        let arr = if sel { " ▸ " } else { "   " };
-        let ls = if sel {
-            Style::new().fg(Theme::ACCENT).bold()
-        } else {
-            Style::new().fg(Theme::FG)
-        };
-        let mut all = vec![
-            Span::styled(String::from(arr), ls),
-            Span::styled(format!("{:<14}", label), ls),
-        ];
-        all.extend(spans);
-        vec![Line::from(all)]
-    };
-
-    // Effect
-    let effect_spans = vec![
-        Span::styled("◀ ", Style::new().fg(Theme::DIM)),
-        Span::styled(
-            String::from(eff.name),
-            Style::new().fg(Theme::ACCENT2).bold(),
-        ),
-        Span::styled(" ▶", Style::new().fg(Theme::DIM)),
-    ];
-
-    // Color
-    let c = app.rgb.color_rgb();
-    let cn = app.rgb.color_name();
-    let color_spans = if eff.has_color {
-        let swatch = if app.rgb.color_idx == RANDOM_COLOR_IDX {
-            Span::styled(" ◆◆◆ ", Style::new().fg(Theme::ACCENT))
-        } else {
-            Span::styled(" ███ ", Style::new().fg(Color::Rgb(c.r, c.g, c.b)))
-        };
-        vec![
-            Span::styled("◀ ", Style::new().fg(Theme::DIM)),
-            Span::styled(String::from(cn), Style::new().fg(Theme::ACCENT2).bold()),
-            Span::styled(" ▶ ", Style::new().fg(Theme::DIM)),
-            swatch,
-        ]
-    } else {
-        vec![Span::styled(
-            "  N/A (effect has no color)",
-            Style::new().fg(Theme::DARK),
-        )]
-    };
-
-    // Brightness bar
-    let bf = (app.rgb.brightness as usize * bar_w / 100).min(bar_w);
-    let be = bar_w.saturating_sub(bf);
-    let bright_spans = vec![
-        Span::styled("━".repeat(bf), Style::new().fg(Theme::ACCENT)),
-        Span::styled("─".repeat(be), Style::new().fg(Theme::DARK)),
-        Span::styled(
-            format!(" {}%", app.rgb.brightness),
-            Style::new().fg(Theme::FG).bold(),
-        ),
-    ];
-
-    // Speed bar
-    let sf = (app.rgb.speed as usize * bar_w / 100).min(bar_w);
-    let se = bar_w.saturating_sub(sf);
-    let speed_spans = vec![
-        Span::styled("━".repeat(sf), Style::new().fg(Theme::ACCENT)),
-        Span::styled("─".repeat(se), Style::new().fg(Theme::DARK)),
-        Span::styled(
-            format!(" {}%", app.rgb.speed),
-            Style::new().fg(Theme::FG).bold(),
-        ),
-    ];
-
-    // Direction
-    let dir_spans = if eff.has_dir {
-        vec![
-            Span::styled("◀ ", Style::new().fg(Theme::DIM)),
-            Span::styled(
-                String::from(app.rgb.dir_name()),
-                Style::new().fg(Theme::ACCENT2).bold(),
-            ),
-            Span::styled(" ▶", Style::new().fg(Theme::DIM)),
-        ]
-    } else {
-        vec![Span::styled(
-            "  N/A (Wave only)",
-            Style::new().fg(Theme::DARK),
-        )]
-    };
-
-    let mut lines: Vec<Line> = Vec::new();
-    lines.extend(mk_row(0, "Effect", effect_spans));
-    lines.push(Line::default());
-    lines.extend(mk_row(1, "Color", color_spans));
-    lines.push(Line::default());
-    lines.extend(mk_row(2, "Brightness", bright_spans));
-    lines.push(Line::default());
-    lines.extend(mk_row(3, "Speed", speed_spans));
-    lines.push(Line::default());
-    lines.extend(mk_row(4, "Direction", dir_spans));
-
-    f.render_widget(Paragraph::new(lines), inner);
+    draw_rgb_rows(frame, rows_area, app);
+    draw_palette(frame, palette_area, app);
+    draw_rgb_preview(frame, preview_area, app);
 }
 
-// ─── Detail Panel (System Tab) ──────────────────────────────────────────────
-
-fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
-    if app.settings.is_empty() {
-        let block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(Style::new().fg(Theme::DARK))
-            .title(Span::styled(
-                " Details ",
-                Style::new().fg(Theme::ACCENT).bold(),
-            ));
-        f.render_widget(Paragraph::new("  No settings loaded").block(block), area);
-        return;
-    }
-
-    let s = &app.settings[app.ctrl_sel];
-    let border = if s.pending.is_some() {
-        Theme::WARM
-    } else {
-        Theme::DIM
-    };
-
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(border))
-        .title(Span::styled(
-            format!(" {} ", s.label),
-            Style::new().fg(Theme::ACCENT).bold(),
-        ));
-
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled("  Current: ", Style::new().fg(Theme::FG_DIM)),
-            Span::styled(s.display.clone(), Style::new().fg(Theme::ACCENT).bold()),
-            Span::styled("  │  Raw: ", Style::new().fg(Theme::FG_DIM)),
-            Span::styled(s.raw.clone(), Style::new().fg(Theme::FG)),
-        ]),
-        Line::from(Span::styled(
-            format!("  {}", s.desc),
-            Style::new().fg(Theme::FG).italic(),
-        )),
+fn draw_rgb_rows(frame: &mut Frame, area: Rect, app: &App) {
+    let effect = app.rgb.effect();
+    let fields = [
+        (RgbField::Effect, effect.name.to_string()),
+        (RgbField::Color, color_value(app)),
+        (RgbField::Brightness, format!("{}%", app.rgb.brightness)),
+        (RgbField::Speed, format!("{}%", app.rgb.speed)),
+        (RgbField::Direction, direction_value(app)),
     ];
 
-    if let Some(pidx) = s.pending {
-        if let SettingKind::Cycle(ref opts) = s.kind {
-            if let Some(opt) = opts.get(pidx) {
-                lines.push(Line::from(vec![
-                    Span::styled("  Preview: ", Style::new().fg(Theme::WARM)),
-                    Span::styled(opt.label.clone(), Style::new().fg(Theme::WARM).bold()),
-                    Span::styled("  → Enter to apply", Style::new().fg(Theme::FG_DIM)),
-                ]));
+    let lines = fields
+        .iter()
+        .enumerate()
+        .map(|(index, (field, value))| {
+            let selected = app.focus == FocusPanel::Rgb && index == app.selected_rgb_field;
+            let style = if selected {
+                Style::new().fg(Theme::TEXT).bg(Theme::ELEVATED).bold()
+            } else {
+                Style::new().fg(Theme::TEXT)
+            };
+            let value_style = if selected {
+                Style::new().fg(Theme::ACCENT).bg(Theme::ELEVATED).bold()
+            } else {
+                Style::new().fg(Theme::ACCENT)
+            };
+
+            Line::from(vec![
+                Span::styled(if selected { "▸ " } else { "  " }, style),
+                Span::styled(format!("{:<11}", field.label()), style),
+                Span::styled(value.clone(), value_style),
+            ])
+        })
+        .collect::<Vec<_>>();
+
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn color_value(app: &App) -> String {
+    if !app.rgb.effect().has_color {
+        "Not used".to_string()
+    } else {
+        app.rgb.color().name.to_string()
+    }
+}
+
+fn direction_value(app: &App) -> String {
+    if app.rgb.effect().has_direction {
+        app.rgb.direction_name().to_string()
+    } else {
+        "Not used".to_string()
+    }
+}
+
+fn draw_palette(frame: &mut Frame, area: Rect, app: &App) {
+    let mut swatches = vec![Span::styled(" Palette ", Style::new().fg(Theme::MUTED))];
+    for (index, color) in COLOR_PALETTE.iter().enumerate() {
+        let selected = index == app.rgb.color_idx;
+        let style = if index == RANDOM_COLOR_INDEX {
+            Style::new()
+                .fg(Theme::ACCENT_2)
+                .bg(if selected {
+                    Theme::ELEVATED
+                } else {
+                    Theme::SURFACE
+                })
+                .bold()
+        } else {
+            Style::new()
+                .fg(to_color(color.rgb))
+                .bg(if selected {
+                    Theme::ELEVATED
+                } else {
+                    Theme::SURFACE
+                })
+                .bold()
+        };
+        swatches.push(Span::styled(if selected { "▣" } else { "■" }, style));
+        swatches.push(Span::raw(" "));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(swatches)), area);
+}
+
+fn draw_rgb_preview(frame: &mut Frame, area: Rect, app: &App) {
+    let mut lines = Vec::new();
+    let status = match &app.keyboard {
+        UsbAccess::Accessible => {
+            if app.rgb_pending {
+                Span::styled("Applying", Style::new().fg(Theme::WARNING).bold())
+            } else if app.rgb_dirty {
+                Span::styled("Preview", Style::new().fg(Theme::WARNING).bold())
+            } else {
+                Span::styled("Ready", Style::new().fg(Theme::SUCCESS).bold())
             }
         }
+        UsbAccess::PermissionDenied => {
+            Span::styled("USB locked", Style::new().fg(Theme::WARNING).bold())
+        }
+        UsbAccess::NotFound => {
+            Span::styled("Keyboard missing", Style::new().fg(Theme::WARNING).bold())
+        }
+        UsbAccess::Error(_) => Span::styled("USB error", Style::new().fg(Theme::DANGER).bold()),
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled(" State ", Style::new().fg(Theme::MUTED)),
+        status,
+    ]));
+    lines.push(Line::from(rgb_preview_spans(
+        app,
+        area.width.saturating_sub(2) as usize,
+    )));
+
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn rgb_preview_spans(app: &App, width: usize) -> Vec<Span<'static>> {
+    let effect = app.rgb.effect();
+    let width = width.clamp(12, 48);
+    let mut spans = Vec::with_capacity(width);
+
+    for i in 0..width {
+        let color = if app.rgb.effect_idx == 0 {
+            Theme::SUBTLE
+        } else if effect.has_color && app.rgb.color_idx != RANDOM_COLOR_INDEX {
+            to_color(app.rgb.color().rgb)
+        } else {
+            let offset = ((app.rgb_phase as usize / 2) + i) % (COLOR_PALETTE.len() - 1);
+            to_color(COLOR_PALETTE[offset].rgb)
+        };
+        spans.push(Span::styled("━", Style::new().fg(color).bold()));
     }
 
-    let hint = match &s.kind {
-        SettingKind::Toggle => "  Enter: Toggle  │  ↑↓: Navigate".into(),
-        SettingKind::Cycle(opts) => {
-            let names: Vec<&str> = opts.iter().map(|o| o.label.as_str()).collect();
-            format!("  ←→: [{}]  │  Enter: Confirm", names.join(" │ "))
-        }
-    };
-    lines.push(Line::from(Span::styled(hint, Style::new().fg(Theme::DIM))));
-
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    spans
 }
 
-// ─── Detail Panel (RGB Tab) ─────────────────────────────────────────────────
+fn draw_sensors(frame: &mut Frame, area: Rect, app: &App) {
+    let block = panel_block("Sensors", FocusPanel::Sensors, app);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-fn draw_rgb_detail(f: &mut Frame, area: Rect, app: &App) {
-    let eff = app.rgb.eff();
+    let [cpu_t, gpu_t, cpu_f, gpu_f] = Layout::vertical([
+        Constraint::Percentage(25),
+        Constraint::Percentage(25),
+        Constraint::Percentage(25),
+        Constraint::Percentage(25),
+    ])
+    .areas(inner);
+
+    draw_metric(
+        frame,
+        cpu_t,
+        "CPU Temperature",
+        &app.sensors.cpu_temp,
+        "°C",
+        MetricKind::Temp,
+    );
+    draw_metric(
+        frame,
+        gpu_t,
+        "GPU Temperature",
+        &app.sensors.gpu_temp,
+        "°C",
+        MetricKind::Temp,
+    );
+    draw_metric(
+        frame,
+        cpu_f,
+        "CPU Fan",
+        &app.sensors.cpu_fan,
+        "%",
+        MetricKind::Fan,
+    );
+    draw_metric(
+        frame,
+        gpu_f,
+        "GPU Fan",
+        &app.sensors.gpu_fan,
+        "%",
+        MetricKind::Fan,
+    );
+}
+
+#[derive(Clone, Copy)]
+enum MetricKind {
+    Temp,
+    Fan,
+}
+
+fn draw_metric(
+    frame: &mut Frame,
+    area: Rect,
+    label: &str,
+    metric: &AnimatedMetric,
+    unit: &str,
+    kind: MetricKind,
+) {
+    if area.height < 3 {
+        return;
+    }
+
+    let [top, gauge_area, spark_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+
+    let color = match kind {
+        MetricKind::Temp => Theme::temp_color(metric.value),
+        MetricKind::Fan => Theme::fan_color(metric.value),
+    };
+
+    let value = metric_value(metric, unit, kind);
+    let status = if metric.error.is_some() {
+        Span::styled("  N/A", Style::new().fg(Theme::DANGER).bold())
+    } else {
+        Span::styled("  live", Style::new().fg(Theme::SUCCESS))
+    };
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!(" {label:<18}"), Style::new().fg(Theme::TEXT).bold()),
+            Span::styled(value, Style::new().fg(color).bold()),
+            status,
+        ])),
+        top,
+    );
+
+    let gauge = Gauge::default()
+        .ratio(metric.ratio())
+        .gauge_style(Style::new().fg(color).bg(Theme::SURFACE_ALT).bold())
+        .style(Style::new().bg(Theme::SURFACE))
+        .label("");
+    frame.render_widget(gauge, gauge_area);
+
+    let data = if metric.history.is_empty() {
+        vec![0]
+    } else {
+        metric.history.clone()
+    };
+    let sparkline = Sparkline::default()
+        .data(data)
+        .max(metric.max.round() as u64)
+        .bar_set(symbols::bar::NINE_LEVELS)
+        .style(Style::new().fg(color).bg(Theme::SURFACE));
+    frame.render_widget(sparkline, spark_area);
+}
+
+fn metric_value(metric: &AnimatedMetric, unit: &str, kind: MetricKind) -> String {
+    if metric.target.is_none() {
+        return "N/A".to_string();
+    }
+
+    if matches!(kind, MetricKind::Fan) && metric.target == Some(0.0) {
+        "Auto".to_string()
+    } else {
+        format!("{:.0}{unit}", metric.value)
+    }
+}
+
+fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(Theme::DIM))
-        .title(Span::styled(
-            " RGB Details ",
-            Style::new().fg(Theme::ACCENT).bold(),
-        ));
+        .border_style(Style::new().fg(Theme::BORDER))
+        .style(Style::new().bg(Theme::SURFACE));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    let desc = match app.rgb.sel {
-        0 => format!(
-            "  {} — {}/{} effects. ←→ to browse.",
-            eff.name,
-            app.rgb.effect_idx + 1,
-            EFFECTS.len()
-        ),
-        1 => format!(
-            "  {} — {}/{} colors. ←→ to cycle.",
-            app.rgb.color_name(),
-            app.rgb.color_idx + 1,
-            COLOR_PALETTE.len()
-        ),
-        2 => format!(
-            "  Brightness {}% — LED intensity. ←→ adjusts ±10%.",
-            app.rgb.brightness
-        ),
-        3 => format!(
-            "  Speed {}% — Animation speed (100 = fastest). ←→ adjusts ±10%.",
-            app.rgb.speed
-        ),
-        4 => format!("  {} — Wave direction. ←→ to cycle.", app.rgb.dir_name()),
-        _ => String::new(),
-    };
+    let [context, message] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
 
-    let lines = vec![
-        Line::from(vec![
-            Span::styled("  Preview: ", Style::new().fg(Theme::FG_DIM)),
-            Span::styled(
-                String::from(eff.name),
-                Style::new().fg(Theme::ACCENT2).bold(),
-            ),
-            if eff.has_color {
-                Span::styled(
-                    format!(" │ {} ", app.rgb.color_name()),
-                    Style::new().fg(Theme::FG),
-                )
-            } else {
-                Span::raw("")
-            },
-            Span::styled(
-                format!("│ B:{}% S:{}%", app.rgb.brightness, app.rgb.speed),
-                Style::new().fg(Theme::FG),
-            ),
-            if eff.has_dir {
-                Span::styled(
-                    format!(" │ Dir:{}", app.rgb.dir_name()),
-                    Style::new().fg(Theme::FG),
-                )
-            } else {
-                Span::raw("")
-            },
-        ]),
-        Line::from(Span::styled(desc, Style::new().fg(Theme::FG_DIM))),
-        Line::default(),
-        Line::from(Span::styled(
-            "  Enter: Apply (auto-saves)  │  ←→: Adjust  │  ↑↓: Param",
-            Style::new().fg(Theme::DIM),
-        )),
-    ];
+    let focus_style = Style::new().fg(Theme::BG).bg(Theme::ACCENT).bold();
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!(" {} ", app.focus.label()), focus_style),
+            Span::raw(" "),
+            Span::styled("Tab/F1/F2/F3 focus  q Quit", Style::new().fg(Theme::MUTED)),
+            Span::styled("  |  ", Style::new().fg(Theme::SUBTLE)),
+            Span::styled(app.context_hint(), Style::new().fg(Theme::TEXT)),
+        ])),
+        context,
+    );
 
-    f.render_widget(Paragraph::new(lines).block(block), area);
-}
-
-// ─── Status Bar ─────────────────────────────────────────────────────────────
-
-fn draw_status(f: &mut Frame, area: Rect, app: &App) {
-    let tab_span = match app.tab {
-        Tab::System => Span::styled(
-            " SYSTEM ",
-            Style::new().fg(Color::Black).bg(Theme::ACCENT).bold(),
-        ),
-        Tab::Rgb => Span::styled(
-            " RGB ",
+    let mut message_spans = vec![
+        Span::styled(
+            format!(" {} ", message_level(app.message.level)),
             Style::new()
-                .fg(Color::Black)
-                .bg(Color::Rgb(128, 0, 255))
+                .fg(Theme::BG)
+                .bg(message_color(app.message.level))
                 .bold(),
         ),
-    };
-
-    let module_span = if app.module_ok {
-        Span::styled(" MODULE ✓ ", Style::new().fg(Theme::COOL).bold())
-    } else {
-        Span::styled(" NO MODULE ", Style::new().fg(Theme::ERR).bold())
-    };
-
-    let kb_span = match &app.rgb.kb_access {
-        UsbAccess::Accessible => Span::styled(" KB ✓ ", Style::new().fg(Theme::COOL).bold()),
-        UsbAccess::PermissionDenied => {
-            Span::styled(" KB LOCKED ", Style::new().fg(Theme::WARM).bold())
-        }
-        UsbAccess::NotFound => Span::styled(" NO KB ", Style::new().fg(Theme::WARM).bold()),
-        UsbAccess::Error(_) => Span::styled(" KB ERR ", Style::new().fg(Theme::ERR).bold()),
-    };
-
-    let sc = if app.err { Theme::ERR } else { Theme::FG_DIM };
-
-    let help = match app.tab {
-        Tab::System => " F1/F2 Tab │ ↑↓ Navigate │ ←→ Cycle │ Enter Confirm/Toggle │ q Quit ",
-        Tab::Rgb => " F1/F2 Tab │ ↑↓ Param │ ←→ Adjust │ Enter Apply (auto-save) │ q Quit ",
-    };
-
-    let lines = vec![
-        Line::from(vec![
-            tab_span,
-            Span::raw(" "),
-            module_span,
-            kb_span,
-            Span::raw(" "),
-            Span::styled(app.status.clone(), Style::new().fg(sc)),
-        ]),
-        Line::from(Span::styled(help, Style::new().fg(Theme::FG_DIM))),
+        Span::raw(" "),
+        Span::styled(
+            app.message.text.clone(),
+            Style::new().fg(message_color(app.message.level)),
+        ),
     ];
 
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(Theme::DARK));
+    if let Some(note) = &app.hardware_note {
+        message_spans.push(Span::styled("  |  ", Style::new().fg(Theme::SUBTLE)));
+        message_spans.push(Span::styled(note.clone(), Style::new().fg(Theme::MUTED)));
+    }
 
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    frame.render_widget(Paragraph::new(Line::from(message_spans)), message);
+}
+
+fn message_level(level: MessageLevel) -> &'static str {
+    match level {
+        MessageLevel::Info => "INFO",
+        MessageLevel::Success => "OK",
+        MessageLevel::Warning => "WARN",
+        MessageLevel::Error => "ERR",
+    }
+}
+
+fn message_color(level: MessageLevel) -> Color {
+    match level {
+        MessageLevel::Info => Theme::ACCENT,
+        MessageLevel::Success => Theme::SUCCESS,
+        MessageLevel::Warning => Theme::WARNING,
+        MessageLevel::Error => Theme::DANGER,
+    }
+}
+
+fn to_color(rgb: Rgb) -> Color {
+    Color::Rgb(rgb.r, rgb.g, rgb.b)
 }

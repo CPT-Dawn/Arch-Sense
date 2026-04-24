@@ -84,14 +84,6 @@ impl PermissionReport {
         });
         sysfs_denied || matches!(self.usb, UsbAccess::PermissionDenied)
     }
-
-    pub(crate) fn startup_hint(&self) -> Option<String> {
-        if self.has_limited_access() {
-            Some(format!("Limited access - {}", setup_hint()))
-        } else {
-            None
-        }
-    }
 }
 
 pub(crate) fn setup_hint() -> &'static str {

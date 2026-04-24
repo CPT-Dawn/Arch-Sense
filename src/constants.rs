@@ -5,7 +5,6 @@ pub(crate) const PS_BASE: &str =
 pub(crate) const PLATFORM_PROFILE: &str = "/sys/firmware/acpi/platform_profile";
 pub(crate) const PROFILE_CHOICES: &str = "/sys/firmware/acpi/platform_profile_choices";
 pub(crate) const CPU_TEMP_PATH: &str = "/sys/class/thermal/thermal_zone0/temp";
-pub(crate) const TICK: Duration = Duration::from_secs(1);
 
 // USB keyboard (Acer Predator PH16-71)
 pub(crate) const KB_VID: u16 = 0x04F2;

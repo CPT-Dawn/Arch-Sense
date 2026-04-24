@@ -9,7 +9,7 @@
 
 <p align="center">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
-  <img alt="Rust" src="https://img.shields.io/badge/rust-2024_edition-orange?style=flat-square&logo=rust">
+  <img alt="Rust" src="https://img.shields.io/badge/rust-2021_edition-orange?style=flat-square&logo=rust">
   <img alt="Arch Linux" src="https://img.shields.io/badge/arch-linux-1793d1?style=flat-square&logo=archlinux&logoColor=white">
   <img alt="Acer Predator" src="https://img.shields.io/badge/acer-predator_PH16--71-39ff14?style=flat-square">
 </p>
@@ -23,13 +23,13 @@
 - **sysfs** — via the [`linuwu_sense`](https://github.com/0x7375646F/Linuwu-Sense) kernel module for thermal profiles, fan speeds, battery management, and hardware toggles.
 - **USB HID** — via `libusb` for keyboard RGB lighting control on the Acer Predator PH16-71, ported from the [`ph16-71-rgb`](https://github.com/Order52/ph16-71-rgb) Python project to native Rust.
 
-Built with [`ratatui`](https://github.com/ratatui/ratatui) for a responsive, Predator-green themed interface that runs at near-zero CPU overhead.
+Built with [`ratatui`](https://github.com/ratatui/ratatui) as a modern single-screen TUI with a dark professional palette, animated gauges, keyboard-first navigation, and a non-blocking hardware worker.
 
 ---
 
 ## Features
 
-### System Controls (`F1`)
+### Controls Panel (`F1`)
 
 | Control | Description |
 |---|---|
@@ -47,16 +47,16 @@ Built with [`ratatui`](https://github.com/ratatui/ratatui) for a responsive, Pre
 - **CPU Temperature** — read from `/sys/class/thermal/thermal_zone0/temp`
 - **GPU Temperature** — queried via `nvidia-smi`
 - **CPU & GPU Fan Speeds** — read from the `linuwu_sense` kernel module
-- Color-coded bars: green (cool) → yellow (warm) → red (hot)
+- Animated gauges and sparklines with cool, warning, and hot status colors
 
-### Keyboard RGB Control (`F2`)
+### Keyboard RGB Panel (`F2`)
 
 Full per-keyboard RGB configuration through USB HID protocol (VID: `04F2`, PID: `0117`):
 
 | Parameter | Options |
 |---|---|
-| **Effects** | Off, Static, Breathing, Wave, Snake, Ripple, Neon, Rain, Lightning, Spot, Stars, Fireball, Snow, Heartbeat |
-| **Colors** | Red, Orange, Gold, Green, Cyan, Blue, Purple, Magenta, Pink, White, Random |
+| **Effects** | Off, Static, Breathing, Wave, Snake, Ripple, Rainbow, Rain, Lightning, Spot, Stars, Fireball, Snow, Heartbeat |
+| **Colors** | Red, Orange, Gold, Emerald, Cyan, Blue, Violet, Magenta, Pink, White, Random |
 | **Brightness** | 0–100% (mapped to hardware range 0–50) |
 | **Speed** | 0–100% (mapped to hardware range 1–9, inverted) |
 | **Direction** | Right, Left, Up, Down, Clockwise, Counter-CW (Wave effect only) |
@@ -217,12 +217,14 @@ arch-sense --help
 
 | Key | Action |
 |---|---|
-| `F1` | Switch to System tab |
-| `F2` | Switch to RGB tab |
-| `Tab` | Toggle between tabs |
+| `F1` | Focus Controls |
+| `F2` | Focus Keyboard RGB |
+| `F3` | Focus Sensors |
+| `Tab` / `Shift+Tab` | Cycle focus across the single-screen panels |
+| `r` | Refresh hardware snapshot |
 | `q` / `Ctrl+C` | Quit |
 
-### System Tab
+### Controls Panel
 
 | Key | Action |
 |---|---|
@@ -231,10 +233,9 @@ arch-sense --help
 | `←` / `h` | Cycle option left |
 | `→` / `l` | Cycle option right |
 | `Enter` / `Space` | Confirm / Toggle |
-| `r` | Refresh all settings |
 | `Esc` | Cancel pending change |
 
-### RGB Tab
+### Keyboard RGB Panel
 
 | Key | Action |
 |---|---|
@@ -243,6 +244,12 @@ arch-sense --help
 | `←` / `h` | Decrease / previous value |
 | `→` / `l` | Increase / next value |
 | `Enter` / `Space` | Apply to keyboard (auto-saves config) |
+
+### Sensors Panel
+
+| Key | Action |
+|---|---|
+| `Enter` / `Space` | Refresh sensors |
 
 ---
 
@@ -254,12 +261,12 @@ arch-sense
 ├── src/main.rs          # Thin binary shim (CLI args -> lib)
 ├── src/app.rs           # App state machine and event loop
 ├── src/ui.rs            # Ratatui rendering layer
-├── src/rgb_settings.rs  # RGB protocol + hardware setting models
-├── src/system.rs        # sysfs + sensor I/O
+├── src/models.rs        # Typed UI, control, sensor, and RGB models
+├── src/hardware.rs      # Worker thread, sysfs, sensors, and USB RGB I/O
 ├── src/config.rs        # Persistent config model and storage
 ├── src/constants.rs     # Hardware paths/protocol constants
 ├── src/theme.rs         # Shared UI palette
-├── Cargo.toml           # Rust 2024 edition, release-optimized (LTO + strip)
+├── Cargo.toml           # Rust 2021 edition, release-optimized (LTO + strip)
 ├── arch-sense.service   # systemd oneshot unit for boot RGB
 └── LICENSE              # MIT
 ```

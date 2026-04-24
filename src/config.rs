@@ -46,10 +46,30 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn load() -> Self {
-        fs::read_to_string(config_path())
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        Self::load_with_warning().0
+    }
+
+    pub(crate) fn load_with_warning() -> (Self, Option<String>) {
+        match fs::read_to_string(config_path()) {
+            Ok(content) => match serde_json::from_str(&content) {
+                Ok(config) => (config, None),
+                Err(error) => (
+                    Self::default(),
+                    Some(format!(
+                        "Config parse failed at {}: {error}; using defaults",
+                        config_path().display()
+                    )),
+                ),
+            },
+            Err(error) if error.kind() == ErrorKind::NotFound => (Self::default(), None),
+            Err(error) => (
+                Self::default(),
+                Some(format!(
+                    "Config read failed at {}: {error}; using defaults",
+                    config_path().display()
+                )),
+            ),
+        }
     }
 
     pub(crate) fn save(&self) -> Result<()> {
