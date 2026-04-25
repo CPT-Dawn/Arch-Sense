@@ -64,16 +64,39 @@ fn panel_block<'a>(title: &'a str, panel: FocusPanel, app: &App) -> Block<'a> {
         Theme::BORDER_MUTED
     };
 
+    let title_style = Style::new()
+        .fg(if focused { Theme::TEXT } else { Theme::MUTED })
+        .bold();
+
+    let mut title_spans = vec![Span::styled(format!(" {title} "), title_style)];
+
+    match panel {
+        FocusPanel::Controls => {
+            let value = if app.module_loaded { "READY" } else { "OFFLINE" };
+            let color = if app.module_loaded {
+                Theme::SUCCESS
+            } else {
+                Theme::DANGER
+            };
+            title_spans.push(Span::styled(
+                format!(" MODULE:{value} "),
+                Style::new().fg(color).bold(),
+            ));
+        }
+        FocusPanel::Rgb => {
+            title_spans.push(Span::styled(
+                format!(" KB:{} ", keyboard_label(&app.keyboard)),
+                Style::new().fg(keyboard_color(&app.keyboard)).bold(),
+            ));
+        }
+        FocusPanel::Sensors => {}
+    }
+
     // Apply background color only if it's Some, otherwise use terminal default
     let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(border))
-        .title(Span::styled(
-            format!(" {title} "),
-            Style::new()
-                .fg(if focused { Theme::TEXT } else { Theme::MUTED })
-                .bold(),
-        ));
+        .title(Line::from(title_spans));
     
     // Apply optional background
     block = match Theme::SURFACE {
