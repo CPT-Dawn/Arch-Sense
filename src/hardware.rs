@@ -643,10 +643,7 @@ fn control_kind(id: ControlId, thermal_choices: &[String]) -> ControlKind {
         }
         ControlId::FanSpeed => ControlKind::Choice(vec![
             ControlChoice::new("0,0", "Auto"),
-            ControlChoice::new("30,30", "Low 30%"),
-            ControlChoice::new("50,50", "Medium 50%"),
-            ControlChoice::new("70,70", "High 70%"),
-            ControlChoice::new("100,100", "Maximum"),
+            ControlChoice::new("100,100", "Max"),
         ]),
         ControlId::UsbCharging => ControlKind::Choice(vec![
             ControlChoice::new("0", "Off"),
@@ -709,6 +706,7 @@ fn display_control_value(id: ControlId, raw: &str) -> String {
         },
         ControlId::FanSpeed => match raw {
             "0" | "0,0" => "Auto".to_string(),
+            "100" | "100,100" => "Max".to_string(),
             other => format!("CPU/GPU {other}"),
         },
         ControlId::UsbCharging => match raw {
