@@ -6,7 +6,6 @@ impl Theme {
     /// Use terminal's default background (supports transparency/blur).
     /// Widgets should not force background colors unless specifically needed for contrast.
     pub(crate) const BG: Option<Color> = None;
-    pub(crate) const BG_HEADER: Color = Color::Rgb(8, 15, 24);
     pub(crate) const SURFACE: Option<Color> = None;
     pub(crate) const ELEVATED: Option<Color> = None;
     

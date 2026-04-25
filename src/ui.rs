@@ -12,6 +12,17 @@ use crate::theme::Theme;
 /// Consistent spacing/padding throughout the UI (in character units)
 const SPACING: u16 = 1;
 
+const DOUBLE_SQUIRCLE_BORDER: symbols::border::Set<'static> = symbols::border::Set {
+    top_left: symbols::line::ROUNDED.top_left,
+    top_right: symbols::line::ROUNDED.top_right,
+    bottom_left: symbols::line::ROUNDED.bottom_left,
+    bottom_right: symbols::line::ROUNDED.bottom_right,
+    vertical_left: symbols::line::DOUBLE.vertical,
+    vertical_right: symbols::line::DOUBLE.vertical,
+    horizontal_top: symbols::line::DOUBLE.horizontal,
+    horizontal_bottom: symbols::line::DOUBLE.horizontal,
+};
+
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
     
@@ -24,7 +35,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(Block::new().style(base_style), area);
 
     let [header, body, footer] = Layout::vertical([
-        Constraint::Length(4),
+        Constraint::Length(5),
         Constraint::Min(18),
         Constraint::Length(4),
     ])
@@ -94,7 +105,7 @@ fn panel_block<'a>(title: &'a str, panel: FocusPanel, app: &App) -> Block<'a> {
 
     // Apply background color only if it's Some, otherwise use terminal default
     let mut block = Block::bordered()
-        .border_type(BorderType::Rounded)
+        .border_set(DOUBLE_SQUIRCLE_BORDER)
         .border_style(Style::new().fg(border))
         .title(Line::from(title_spans));
     
@@ -128,22 +139,31 @@ fn blend(a: Color, b: Color, mix: f64) -> Color {
 
 fn draw_header(f: &mut Frame, area: Rect) {
     let block = Block::bordered()
-        .border_type(BorderType::Double)
-        .border_style(Style::new().fg(Theme::ACCENT))
-        .style(Style::new().bg(Theme::BG_HEADER));
+        .border_set(DOUBLE_SQUIRCLE_BORDER)
+        .border_style(Style::new().fg(Theme::BORDER));
 
-    let text = Line::from(vec![
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let [title_area, subtitle_area] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
+        .flex(ratatui::layout::Flex::Center)
+        .areas(inner);
+
+    let title = Line::from(vec![
         Span::styled("  ◆ ", Style::new().fg(Theme::ACCENT).bold()),
         Span::styled("A R C H - S E N S E", Style::new().fg(Theme::ACCENT).bold()),
-        Span::styled("  ◆  ", Style::new().fg(Theme::ACCENT)),
-        Span::styled(
-            "Acer Predator Control Center",
-            Style::new().fg(Theme::FG_DIM),
-        ),
+        Span::styled("  ◆ ", Style::new().fg(Theme::ACCENT).bold()),
     ])
     .centered();
 
-    f.render_widget(Paragraph::new(text).block(block), area);
+    let subtitle = Line::from(Span::styled(
+        "Acer Predator Control Center",
+        Style::new().fg(Theme::FG_DIM),
+    ))
+    .centered();
+
+    f.render_widget(Paragraph::new(title), title_area);
+    f.render_widget(Paragraph::new(subtitle), subtitle_area);
 }
 
 fn keyboard_label(access: &UsbAccess) -> &'static str {
@@ -586,7 +606,7 @@ fn visible_history(history: &VecDeque<u64>, width: usize) -> Vec<u64> {
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let mut block = Block::bordered()
-        .border_type(BorderType::Rounded)
+        .border_set(DOUBLE_SQUIRCLE_BORDER)
         .border_style(Style::new().fg(Theme::BORDER));
     
     // Apply optional background
