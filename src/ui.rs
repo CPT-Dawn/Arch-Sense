@@ -83,21 +83,17 @@ fn panel_block<'a>(title: &'a str, panel: FocusPanel, app: &App) -> Block<'a> {
 
     match panel {
         FocusPanel::Controls => {
-            let value = if app.module_loaded { "READY" } else { "OFFLINE" };
-            let color = if app.module_loaded {
-                Theme::SUCCESS
-            } else {
-                Theme::DANGER
-            };
+            let (label, color) = module_title_status(app.module_loaded);
             title_spans.push(Span::styled(
-                format!(" MODULE:{value} "),
+                format!(" {label} "),
                 Style::new().fg(color).bold(),
             ));
         }
         FocusPanel::Rgb => {
+            let (label, color) = keyboard_title_status(&app.keyboard);
             title_spans.push(Span::styled(
-                format!(" KB:{} ", keyboard_label(&app.keyboard)),
-                Style::new().fg(keyboard_color(&app.keyboard)).bold(),
+                format!(" {label} "),
+                Style::new().fg(color).bold(),
             ));
         }
         FocusPanel::Sensors => {}
@@ -116,6 +112,14 @@ fn panel_block<'a>(title: &'a str, panel: FocusPanel, app: &App) -> Block<'a> {
     };
     
     block
+}
+
+fn module_title_status(module_loaded: bool) -> (&'static str, Color) {
+    if module_loaded {
+        ("Detected ✅", Theme::MUTED)
+    } else {
+        ("Kernal Missing ❌", Theme::DANGER)
+    }
 }
 
 fn pulse_color(app: &App, base: Color, pulse: Color) -> Color {
@@ -163,21 +167,12 @@ fn draw_header(f: &mut Frame, area: Rect) {
     f.render_widget(Paragraph::new(title), title_area);
 }
 
-fn keyboard_label(access: &UsbAccess) -> &'static str {
+fn keyboard_title_status(access: &UsbAccess) -> (&'static str, Color) {
     match access {
-        UsbAccess::Accessible => "READY",
-        UsbAccess::PermissionDenied => "LOCKED",
-        UsbAccess::NotFound => "MISSING",
-        UsbAccess::Error(_) => "ERROR",
-    }
-}
-
-fn keyboard_color(access: &UsbAccess) -> Color {
-    match access {
-        UsbAccess::Accessible => Theme::SUCCESS,
-        UsbAccess::PermissionDenied => Theme::WARNING,
-        UsbAccess::NotFound => Theme::WARNING,
-        UsbAccess::Error(_) => Theme::DANGER,
+        UsbAccess::Accessible => ("Detected ✅", Theme::MUTED),
+        UsbAccess::PermissionDenied => ("Permission Denied 🔒", Theme::WARNING),
+        UsbAccess::NotFound => ("Not Found ⚠️", Theme::WARNING),
+        UsbAccess::Error(_) => ("Error 🚫", Theme::DANGER),
     }
 }
 
