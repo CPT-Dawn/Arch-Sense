@@ -7,8 +7,8 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use crate::config::AppConfig;
 use crate::hardware::{spawn_worker, HardwareEvent, HardwareHandle, HardwareRequest};
 use crate::models::{
-    ControlId, ControlItem, ControlKind, FanMode, FocusPanel, RgbField, RgbSettings,
-    SensorMetric, SensorSnapshot,
+    ControlId, ControlItem, ControlKind, FanMode, FocusPanel, RgbField, RgbSettings, SensorMetric,
+    SensorSnapshot,
 };
 use crate::permissions::UsbAccess;
 use crate::ui::draw;
@@ -134,10 +134,7 @@ impl SensorsState {
     }
 
     fn push_history(history: &mut VecDeque<u64>, value: Option<f64>, max: f64) {
-        let clamped = value
-            .unwrap_or(0.0)
-            .clamp(0.0, max)
-            .round() as u64;
+        let clamped = value.unwrap_or(0.0).clamp(0.0, max).round() as u64;
         history.push_back(clamped);
 
         while history.len() > HISTORY_LIMIT {

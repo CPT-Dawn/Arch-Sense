@@ -5,82 +5,99 @@ pub(crate) struct Theme;
 impl Theme {
     // -------------------------------------------------------------------------
     // Backgrounds & Surfaces
-    // We leave these None to respect the user's terminal transparency, 
+    // We leave these None to respect the user's terminal transparency,
     // but you can define them if you use filled blocks.
     // -------------------------------------------------------------------------
     pub(crate) const BG: Option<Color> = None;
     pub(crate) const SURFACE: Option<Color> = None;
     pub(crate) const ELEVATED: Option<Color> = None;
-    
+
     // -------------------------------------------------------------------------
     // Borders
     // -------------------------------------------------------------------------
-    /// Active/Selected panel border (Bright indigo/blue)
-    pub(crate) const BORDER: Color = Color::Rgb(122, 162, 247);
-    /// Inactive panel border (Deep, subtle slate-blue)
-    pub(crate) const BORDER_MUTED: Color = Color::Rgb(41, 46, 66);
-    
+    /// Global frame border for header/footer framing.
+    pub(crate) const BORDER_FRAME: Color = Color::Rgb(83, 112, 153);
+    /// Focused panel border (electric cyan/blue).
+    pub(crate) const BORDER_FOCUS: Color = Color::Rgb(99, 183, 255);
+    /// Inactive panel border (subtle slate).
+    pub(crate) const BORDER_IDLE: Color = Color::Rgb(58, 69, 96);
+
     // -------------------------------------------------------------------------
     // Typography
     // -------------------------------------------------------------------------
-    /// Primary text (Crisp, cool off-white for high readability without eye strain)
-    pub(crate) const TEXT: Color = Color::Rgb(192, 202, 245);
-    /// Secondary text (Dimmed, used for labels and units like "°C" or "RPM")
-    pub(crate) const MUTED: Color = Color::Rgb(86, 95, 137);
-    /// Barely visible text (e.g., disabled items or grid lines)
-    pub(crate) const SUBTLE: Color = Color::Rgb(59, 66, 97);
-    
+    /// High-emphasis readable text.
+    pub(crate) const TEXT_PRIMARY: Color = Color::Rgb(220, 228, 244);
+    /// Supporting labels and less important values.
+    pub(crate) const TEXT_SECONDARY: Color = Color::Rgb(154, 169, 198);
+    /// Tertiary hints, separators, and passive metadata.
+    pub(crate) const TEXT_TERTIARY: Color = Color::Rgb(116, 129, 157);
+    /// Disabled and de-emphasized text.
+    pub(crate) const TEXT_DISABLED: Color = Color::Rgb(88, 99, 124);
+
     // -------------------------------------------------------------------------
     // Accents & Branding
     // -------------------------------------------------------------------------
-    /// Main application accent (Vibrant Cyan - perfect for headers/active tabs)
-    pub(crate) const ACCENT: Color = Color::Rgb(125, 207, 255);
-    /// Secondary accent (Vibrant Purple - good for toggles or secondary states)
-    pub(crate) const ACCENT_2: Color = Color::Rgb(187, 154, 247);
-    
+    /// Main brand/accent color for key highlights.
+    pub(crate) const BRAND_PRIMARY: Color = Color::Rgb(95, 182, 255);
+    /// Secondary accent used for secondary highlights/animations.
+    pub(crate) const BRAND_SECONDARY: Color = Color::Rgb(80, 224, 214);
+    /// Tertiary accent for animated pulse blending.
+    pub(crate) const BRAND_TERTIARY: Color = Color::Rgb(160, 149, 245);
+
     // -------------------------------------------------------------------------
     // Semantic & Status Colors
     // -------------------------------------------------------------------------
-    pub(crate) const SUCCESS: Color = Color::Rgb(158, 206, 106); // Neon Green
-    pub(crate) const WARNING: Color = Color::Rgb(224, 175, 104); // Vibrant Amber
-    pub(crate) const DANGER: Color = Color::Rgb(247, 118, 142);  // Punchy Coral/Red
-    
+    pub(crate) const STATE_INFO: Color = Color::Rgb(106, 189, 255);
+    pub(crate) const STATE_SUCCESS: Color = Color::Rgb(128, 214, 145);
+    pub(crate) const STATE_WARNING: Color = Color::Rgb(243, 189, 101);
+    pub(crate) const STATE_ERROR: Color = Color::Rgb(240, 111, 132);
+    /// Foreground text rendered on status chips.
+    pub(crate) const TEXT_ON_STATUS: Color = Color::Rgb(14, 20, 31);
+
     // -------------------------------------------------------------------------
     // Sensor Specific Colors
     // -------------------------------------------------------------------------
-    pub(crate) const COOL: Color = Color::Rgb(125, 207, 255);    // Cyan
-    pub(crate) const NORMAL: Color = Color::Rgb(158, 206, 106);  // Green
-    pub(crate) const WARM: Color = Color::Rgb(255, 158, 100);    // Orange
-    pub(crate) const HOT: Color = Color::Rgb(255, 85, 85);       // Intense Red
+    pub(crate) const TEMP_COOL: Color = Color::Rgb(112, 196, 255);
+    pub(crate) const TEMP_NORMAL: Color = Color::Rgb(128, 214, 145);
+    pub(crate) const TEMP_WARM: Color = Color::Rgb(242, 186, 101);
+    pub(crate) const TEMP_HOT: Color = Color::Rgb(240, 106, 123);
+
+    pub(crate) const FAN_QUIET: Color = Color::Rgb(120, 201, 255);
+    pub(crate) const FAN_NORMAL: Color = Color::Rgb(131, 208, 153);
+    pub(crate) const FAN_LOUD: Color = Color::Rgb(239, 180, 94);
+    pub(crate) const FAN_MAX: Color = Color::Rgb(236, 101, 119);
+
+    /// Interactive/value emphasis colors.
+    pub(crate) const VALUE_PRIMARY: Color = Color::Rgb(96, 186, 255);
+    pub(crate) const VALUE_SELECTED: Color = Color::Rgb(95, 225, 214);
 
     /// Determine color based on temperature thresholds
     pub(crate) fn temp_color(value: f64) -> Color {
-        // Expanded to 4 tiers for better visual feedback in graphs
         if value < 50.0 {
-            Self::COOL     // Idle / Browsing
+            Self::TEMP_COOL
         } else if value < 75.0 {
-            Self::NORMAL   // Moderate load
+            Self::TEMP_NORMAL
         } else if value < 85.0 {
-            Self::WARM     // Heavy load / Gaming
+            Self::TEMP_WARM
         } else {
-            Self::HOT      // Throttling territory
+            Self::TEMP_HOT
         }
     }
 
     /// Determine color based on fan RPM percentage
     pub(crate) fn fan_rpm_color(value: f64, max_rpm: f64) -> Color {
         if value <= 0.0 || max_rpm <= 0.0 {
-            Self::MUTED
+            Self::TEXT_TERTIARY
         } else {
             let ratio = value / max_rpm;
             if ratio < 0.35 {
-                Self::COOL     // Quiet mode
+                Self::FAN_QUIET
             } else if ratio < 0.65 {
-                Self::NORMAL   // Audible but fine
+                Self::FAN_NORMAL
             } else if ratio < 0.85 {
-                Self::WARNING  // Getting loud
+                Self::FAN_LOUD
             } else {
-                Self::DANGER   // Jet engine
+                Self::FAN_MAX
             }
         }
     }

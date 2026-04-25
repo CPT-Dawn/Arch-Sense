@@ -12,8 +12,8 @@ use crate::constants::{
     PS_BASE, SPEED_HW_FAST, SPEED_HW_SLOW, USB_TIMEOUT,
 };
 use crate::models::{
-    ControlChoice, ControlId, ControlItem, ControlKind, FanMode, Rgb, RgbSettings,
-    SensorMetric, SensorSnapshot, OFF_EFFECT_INDEX, RANDOM_COLOR_INDEX,
+    ControlChoice, ControlId, ControlItem, ControlKind, FanMode, Rgb, RgbSettings, SensorMetric,
+    SensorSnapshot, OFF_EFFECT_INDEX, RANDOM_COLOR_INDEX,
 };
 use crate::permissions::{keyboard_access, keyboard_present, open_keyboard, setup_hint, UsbAccess};
 
@@ -232,9 +232,8 @@ fn read_gpu_temp_from_nvidia_smi() -> Result<f64> {
     {
         Ok(output) if output.status.success() => {
             let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            raw.parse::<f64>().with_context(|| {
-                format!("parsing GPU temperature from nvidia-smi output '{raw}'")
-            })
+            raw.parse::<f64>()
+                .with_context(|| format!("parsing GPU temperature from nvidia-smi output '{raw}'"))
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -365,8 +364,7 @@ fn fan_score(sample: &HwmonFanSample, role: SensorRole) -> i32 {
 
     match role {
         SensorRole::Cpu => {
-            if contains_any(&haystack, &["package", "tctl", "tdie", "coretemp", "cpu"])
-            {
+            if contains_any(&haystack, &["package", "tctl", "tdie", "coretemp", "cpu"]) {
                 score += 4;
             }
             if contains_any(&haystack, &["gpu", "amdgpu", "nouveau", "nvidia"]) {
@@ -374,8 +372,7 @@ fn fan_score(sample: &HwmonFanSample, role: SensorRole) -> i32 {
             }
         }
         SensorRole::Gpu => {
-            if contains_any(&haystack, &["gpu", "edge", "junction", "amdgpu", "nvidia"])
-            {
+            if contains_any(&haystack, &["gpu", "edge", "junction", "amdgpu", "nvidia"]) {
                 score += 4;
             }
             if contains_any(&haystack, &["cpu", "package", "coretemp"]) {
@@ -402,8 +399,8 @@ fn collect_hwmon_fan_samples() -> Result<Vec<HwmonFanSample>> {
     let mut samples = Vec::new();
 
     for hwmon_dir in list_hwmon_dirs()? {
-        let hwmon_name = read_optional_string(&hwmon_dir.join("name"))
-            .unwrap_or_else(|| "unknown".to_string());
+        let hwmon_name =
+            read_optional_string(&hwmon_dir.join("name")).unwrap_or_else(|| "unknown".to_string());
         let entries = match fs::read_dir(&hwmon_dir) {
             Ok(entries) => entries,
             Err(_) => continue,
@@ -458,8 +455,8 @@ fn collect_hwmon_temp_samples() -> Result<Vec<HwmonTempSample>> {
     let mut samples = Vec::new();
 
     for hwmon_dir in list_hwmon_dirs()? {
-        let hwmon_name = read_optional_string(&hwmon_dir.join("name"))
-            .unwrap_or_else(|| "unknown".to_string());
+        let hwmon_name =
+            read_optional_string(&hwmon_dir.join("name")).unwrap_or_else(|| "unknown".to_string());
         let entries = match fs::read_dir(&hwmon_dir) {
             Ok(entries) => entries,
             Err(_) => continue,
@@ -529,8 +526,7 @@ fn temperature_score(sample: &HwmonTempSample, role: SensorRole) -> i32 {
             }
         }
         SensorRole::Gpu => {
-            if contains_any(&haystack, &["gpu", "edge", "junction", "amdgpu", "nvidia"])
-            {
+            if contains_any(&haystack, &["gpu", "edge", "junction", "amdgpu", "nvidia"]) {
                 score += 4;
             }
             if contains_any(&haystack, &["cpu", "package", "coretemp"]) {

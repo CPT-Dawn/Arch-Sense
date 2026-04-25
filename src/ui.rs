@@ -25,7 +25,7 @@ const DOUBLE_SQUIRCLE_BORDER: symbols::border::Set<'static> = symbols::border::S
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
-    
+
     // Don't force a background color - let the terminal's default show through
     // This enables transparency/blur support and respects the user's terminal theme
     let base_style = match Theme::BG {
@@ -70,13 +70,17 @@ fn draw_body(frame: &mut Frame, area: Rect, app: &App) {
 fn panel_block<'a>(title: &'a str, panel: FocusPanel, app: &App) -> Block<'a> {
     let focused = app.focus == panel;
     let border = if focused {
-        pulse_color(app, Theme::ACCENT, Theme::ACCENT_2)
+        pulse_color(app, Theme::BORDER_FOCUS, Theme::BRAND_TERTIARY)
     } else {
-        Theme::BORDER_MUTED
+        Theme::BORDER_IDLE
     };
 
     let title_style = Style::new()
-        .fg(if focused { Theme::TEXT } else { Theme::MUTED })
+        .fg(if focused {
+            Theme::TEXT_PRIMARY
+        } else {
+            Theme::TEXT_SECONDARY
+        })
         .bold();
 
     let mut title_spans = vec![Span::styled(format!(" {title} "), title_style)];
@@ -104,21 +108,21 @@ fn panel_block<'a>(title: &'a str, panel: FocusPanel, app: &App) -> Block<'a> {
         .border_set(DOUBLE_SQUIRCLE_BORDER)
         .border_style(Style::new().fg(border))
         .title(Line::from(title_spans));
-    
+
     // Apply optional background
     block = match Theme::SURFACE {
         Some(bg) => block.style(Style::new().bg(bg)),
         None => block,
     };
-    
+
     block
 }
 
 fn module_title_status(module_loaded: bool) -> (&'static str, Color) {
     if module_loaded {
-        ("Detected ✅", Theme::MUTED)
+        ("Detected ✅", Theme::TEXT_SECONDARY)
     } else {
-        ("Kernal Missing ❌", Theme::DANGER)
+        ("Kernel Missing ❌", Theme::STATE_ERROR)
     }
 }
 
@@ -144,7 +148,7 @@ fn blend(a: Color, b: Color, mix: f64) -> Color {
 fn draw_header(f: &mut Frame, area: Rect) {
     let block = Block::bordered()
         .border_set(DOUBLE_SQUIRCLE_BORDER)
-        .border_style(Style::new().fg(Theme::BORDER));
+        .border_style(Style::new().fg(Theme::BORDER_FRAME));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -154,12 +158,15 @@ fn draw_header(f: &mut Frame, area: Rect) {
         .areas(inner);
 
     let title = Line::from(vec![
-        Span::styled("  ◆ ", Style::new().fg(Theme::ACCENT).bold()),
-        Span::styled("A R C H - S E N S E", Style::new().fg(Theme::ACCENT).bold()),
-        Span::styled("  ◆  ", Style::new().fg(Theme::ACCENT)),
+        Span::styled("  ◆ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+        Span::styled(
+            "A R C H - S E N S E",
+            Style::new().fg(Theme::BRAND_PRIMARY).bold(),
+        ),
+        Span::styled("  ◆  ", Style::new().fg(Theme::BRAND_SECONDARY)),
         Span::styled(
             "Acer Predator Control Center",
-            Style::new().fg(Theme::MUTED),
+            Style::new().fg(Theme::TEXT_SECONDARY),
         ),
     ])
     .centered();
@@ -169,10 +176,10 @@ fn draw_header(f: &mut Frame, area: Rect) {
 
 fn keyboard_title_status(access: &UsbAccess) -> (&'static str, Color) {
     match access {
-        UsbAccess::Accessible => ("Detected ✅", Theme::MUTED),
-        UsbAccess::PermissionDenied => ("Permission Denied 🔒", Theme::WARNING),
-        UsbAccess::NotFound => ("Not Found ⚠️", Theme::WARNING),
-        UsbAccess::Error(_) => ("Error 🚫", Theme::DANGER),
+        UsbAccess::Accessible => ("Detected ✅", Theme::TEXT_SECONDARY),
+        UsbAccess::PermissionDenied => ("Permission Denied 🔒", Theme::STATE_WARNING),
+        UsbAccess::NotFound => ("Not Found ⚠️", Theme::STATE_WARNING),
+        UsbAccess::Error(_) => ("Error 🚫", Theme::STATE_ERROR),
     }
 }
 
@@ -197,7 +204,7 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
     if app.controls.is_empty() {
         frame.render_widget(
             Paragraph::new(" Waiting for hardware controls...")
-                .style(Style::new().fg(Theme::MUTED))
+                .style(Style::new().fg(Theme::TEXT_SECONDARY))
                 .alignment(Alignment::Center),
             content_area,
         );
@@ -213,12 +220,12 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
             let pending = item.pending.is_some();
             let error = item.last_error.is_some();
             let base_style = if selected {
-                style_with_bg(Style::new().fg(Theme::TEXT).bold(), Theme::ELEVATED)
+                style_with_bg(Style::new().fg(Theme::TEXT_PRIMARY).bold(), Theme::ELEVATED)
             } else {
-                Style::new().fg(Theme::TEXT)
+                Style::new().fg(Theme::TEXT_PRIMARY)
             };
             let value_style = if error {
-                let base = Style::new().fg(Theme::DANGER);
+                let base = Style::new().fg(Theme::STATE_ERROR);
                 let bg = if selected {
                     Theme::ELEVATED
                 } else {
@@ -226,9 +233,7 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
                 };
                 style_with_bg(base, bg)
             } else if pending {
-                let base = Style::new()
-                    .fg(Theme::WARNING)
-                    .bold();
+                let base = Style::new().fg(Theme::STATE_WARNING).bold();
                 let bg = if selected {
                     Theme::ELEVATED
                 } else {
@@ -236,7 +241,11 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
                 };
                 style_with_bg(base, bg)
             } else {
-                Style::new().fg(Theme::ACCENT)
+                Style::new().fg(if selected {
+                    Theme::VALUE_SELECTED
+                } else {
+                    Theme::VALUE_PRIMARY
+                })
             };
             let marker = if selected { "▸" } else { " " };
             let state = if app.control_pending == Some(item.id) {
@@ -253,7 +262,11 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
                 Cell::from(marker).style(base_style),
                 Cell::from(item.label()).style(base_style),
                 Cell::from(item.visible_value()).style(value_style),
-                Cell::from(state).style(Style::new().fg(Theme::SUBTLE)),
+                Cell::from(state).style(Style::new().fg(control_state_color(
+                    app.control_pending == Some(item.id),
+                    pending,
+                    error,
+                ))),
             ])
         })
         .collect::<Vec<_>>();
@@ -265,11 +278,14 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
         Constraint::Length(8),
     ];
 
-    frame.render_widget(Table::new(rows, widths).column_spacing(SPACING), content_area);
+    frame.render_widget(
+        Table::new(rows, widths).column_spacing(SPACING),
+        content_area,
+    );
 }
 
 fn draw_rgb(frame: &mut Frame, area: Rect, app: &App) {
-    let block = panel_block("Keyboard RGB", FocusPanel::Rgb, app);
+    let block = panel_block("Keyboard", FocusPanel::Rgb, app);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -307,14 +323,17 @@ fn draw_rgb_rows(frame: &mut Frame, area: Rect, app: &App) {
         .map(|(index, (field, value))| {
             let selected = app.focus == FocusPanel::Rgb && index == app.selected_rgb_field;
             let style = if selected {
-                style_with_bg(Style::new().fg(Theme::TEXT).bold(), Theme::ELEVATED)
+                style_with_bg(Style::new().fg(Theme::TEXT_PRIMARY).bold(), Theme::ELEVATED)
             } else {
-                Style::new().fg(Theme::TEXT)
+                Style::new().fg(Theme::TEXT_PRIMARY)
             };
             let value_style = if selected {
-                style_with_bg(Style::new().fg(Theme::ACCENT).bold(), Theme::ELEVATED)
+                style_with_bg(
+                    Style::new().fg(Theme::VALUE_SELECTED).bold(),
+                    Theme::ELEVATED,
+                )
             } else {
-                Style::new().fg(Theme::ACCENT)
+                Style::new().fg(Theme::VALUE_PRIMARY)
             };
 
             Line::from(vec![
@@ -345,7 +364,10 @@ fn direction_value(app: &App) -> String {
 }
 
 fn draw_palette(frame: &mut Frame, area: Rect, app: &App) {
-    let mut swatches = vec![Span::styled(" Palette ", Style::new().fg(Theme::MUTED))];
+    let mut swatches = vec![Span::styled(
+        " Palette ",
+        Style::new().fg(Theme::TEXT_SECONDARY),
+    )];
     for (index, color) in COLOR_PALETTE.iter().enumerate() {
         let selected = index == app.rgb.color_idx;
         let bg = if selected {
@@ -354,7 +376,7 @@ fn draw_palette(frame: &mut Frame, area: Rect, app: &App) {
             Theme::SURFACE
         };
         let style = if index == RANDOM_COLOR_INDEX {
-            style_with_bg(Style::new().fg(Theme::ACCENT_2).bold(), bg)
+            style_with_bg(Style::new().fg(Theme::BRAND_TERTIARY).bold(), bg)
         } else {
             style_with_bg(Style::new().fg(to_color(color.rgb)).bold(), bg)
         };
@@ -370,24 +392,27 @@ fn draw_rgb_preview(frame: &mut Frame, area: Rect, app: &App) {
     let status = match &app.keyboard {
         UsbAccess::Accessible => {
             if app.rgb_pending {
-                Span::styled("Applying", Style::new().fg(Theme::WARNING).bold())
+                Span::styled("Applying", Style::new().fg(Theme::STATE_WARNING).bold())
             } else if app.rgb_dirty {
-                Span::styled("Preview", Style::new().fg(Theme::WARNING).bold())
+                Span::styled("Preview", Style::new().fg(Theme::STATE_INFO).bold())
             } else {
-                Span::styled("Ready", Style::new().fg(Theme::SUCCESS).bold())
+                Span::styled("Ready", Style::new().fg(Theme::STATE_SUCCESS).bold())
             }
         }
         UsbAccess::PermissionDenied => {
-            Span::styled("USB locked", Style::new().fg(Theme::WARNING).bold())
+            Span::styled("USB locked", Style::new().fg(Theme::STATE_WARNING).bold())
         }
-        UsbAccess::NotFound => {
-            Span::styled("Keyboard missing", Style::new().fg(Theme::WARNING).bold())
+        UsbAccess::NotFound => Span::styled(
+            "Keyboard missing",
+            Style::new().fg(Theme::STATE_WARNING).bold(),
+        ),
+        UsbAccess::Error(_) => {
+            Span::styled("USB error", Style::new().fg(Theme::STATE_ERROR).bold())
         }
-        UsbAccess::Error(_) => Span::styled("USB error", Style::new().fg(Theme::DANGER).bold()),
     };
 
     lines.push(Line::from(vec![
-        Span::styled(" State ", Style::new().fg(Theme::MUTED)),
+        Span::styled(" State ", Style::new().fg(Theme::TEXT_SECONDARY)),
         status,
     ]));
     lines.push(Line::from(rgb_preview_spans(
@@ -405,7 +430,7 @@ fn rgb_preview_spans(app: &App, width: usize) -> Vec<Span<'static>> {
 
     for i in 0..width {
         let color = if app.rgb.effect_idx == 0 {
-            Theme::SUBTLE
+            Theme::TEXT_DISABLED
         } else if effect.has_color && app.rgb.color_idx != RANDOM_COLOR_INDEX {
             to_color(app.rgb.color().rgb)
         } else {
@@ -494,18 +519,15 @@ fn draw_metric(
         return;
     }
 
-    let [top, spark_area] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(1),
-    ])
-    .areas(area);
+    let [top, spark_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
 
     let value = metric_value(metric, kind);
     let color = metric_sample_color(kind, metric.value, metric.max);
 
     let mut top_spans = vec![Span::styled(
         format!(" {label:<17}"),
-        Style::new().fg(Theme::TEXT).bold(),
+        Style::new().fg(Theme::TEXT_PRIMARY).bold(),
     )];
 
     if let Some(mode) = mode {
@@ -518,13 +540,13 @@ fn draw_metric(
     top_spans.push(Span::styled(value, Style::new().fg(color).bold()));
 
     if metric.error.is_some() {
-        top_spans.push(Span::styled(" N/A", Style::new().fg(Theme::DANGER).bold()));
+        top_spans.push(Span::styled(
+            " N/A",
+            Style::new().fg(Theme::STATE_ERROR).bold(),
+        ));
     }
 
-    frame.render_widget(
-        Paragraph::new(Line::from(top_spans)),
-        top,
-    );
+    frame.render_widget(Paragraph::new(Line::from(top_spans)), top);
 
     let width = spark_area.width.max(1) as usize;
     let mut data = visible_history(history, width);
@@ -533,7 +555,7 @@ fn draw_metric(
     }
 
     let bar_color = if metric.error.is_some() {
-        Theme::SUBTLE
+        Theme::TEXT_DISABLED
     } else {
         color
     };
@@ -578,8 +600,8 @@ fn metric_sample_color(kind: MetricKind, value: f64, max: f64) -> Color {
 
 fn fan_mode_color(mode: FanMode) -> Color {
     match mode {
-        FanMode::Auto => Theme::MUTED,
-        FanMode::Max => Theme::WARNING,
+        FanMode::Auto => Theme::TEXT_SECONDARY,
+        FanMode::Max => Theme::STATE_WARNING,
     }
 }
 
@@ -599,29 +621,31 @@ fn visible_history(history: &VecDeque<u64>, width: usize) -> Vec<u64> {
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let mut block = Block::bordered()
         .border_set(DOUBLE_SQUIRCLE_BORDER)
-        .border_style(Style::new().fg(Theme::BORDER));
-    
+        .border_style(Style::new().fg(Theme::BORDER_FRAME));
+
     // Apply optional background
     block = match Theme::SURFACE {
         Some(bg) => block.style(Style::new().bg(bg)),
         None => block,
     };
-    
+
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let [context, message] =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
+    let [context, message] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
         .spacing(SPACING)
         .areas(inner);
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("Tab switch panels", Style::new().fg(Theme::MUTED)),
-            Span::styled("  |  r refresh  |  ", Style::new().fg(Theme::MUTED)),
-            Span::styled("q quit", Style::new().fg(Theme::MUTED)),
-            Span::styled("  |  ", Style::new().fg(Theme::SUBTLE)),
-            Span::styled(app.context_hint(), Style::new().fg(Theme::TEXT)),
+            Span::styled("Tab switch panels", Style::new().fg(Theme::TEXT_SECONDARY)),
+            Span::styled(
+                "  |  r refresh  |  ",
+                Style::new().fg(Theme::TEXT_SECONDARY),
+            ),
+            Span::styled("q quit", Style::new().fg(Theme::TEXT_SECONDARY)),
+            Span::styled("  |  ", Style::new().fg(Theme::TEXT_DISABLED)),
+            Span::styled(app.context_hint(), Style::new().fg(Theme::TEXT_PRIMARY)),
         ])),
         context,
     );
@@ -630,7 +654,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         {
             let level_style = style_with_bg(
                 Style::new()
-                    .fg(Theme::BG.unwrap_or(Color::White))
+                    .fg(Theme::TEXT_ON_STATUS)
                     .bg(message_color(app.message.level))
                     .bold(),
                 None,
@@ -648,8 +672,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     ];
 
     if let Some(note) = &app.hardware_note {
-        message_spans.push(Span::styled("  |  ", Style::new().fg(Theme::SUBTLE)));
-        message_spans.push(Span::styled(note.clone(), Style::new().fg(Theme::MUTED)));
+        message_spans.push(Span::styled("  |  ", Style::new().fg(Theme::TEXT_DISABLED)));
+        message_spans.push(Span::styled(
+            note.clone(),
+            Style::new().fg(Theme::TEXT_SECONDARY),
+        ));
     }
 
     frame.render_widget(Paragraph::new(Line::from(message_spans)), message);
@@ -666,10 +693,22 @@ fn message_level(level: MessageLevel) -> &'static str {
 
 fn message_color(level: MessageLevel) -> Color {
     match level {
-        MessageLevel::Info => Theme::ACCENT,
-        MessageLevel::Success => Theme::SUCCESS,
-        MessageLevel::Warning => Theme::WARNING,
-        MessageLevel::Error => Theme::DANGER,
+        MessageLevel::Info => Theme::STATE_INFO,
+        MessageLevel::Success => Theme::STATE_SUCCESS,
+        MessageLevel::Warning => Theme::STATE_WARNING,
+        MessageLevel::Error => Theme::STATE_ERROR,
+    }
+}
+
+fn control_state_color(applying: bool, pending: bool, error: bool) -> Color {
+    if applying {
+        Theme::STATE_INFO
+    } else if error {
+        Theme::STATE_ERROR
+    } else if pending {
+        Theme::STATE_WARNING
+    } else {
+        Theme::TEXT_DISABLED
     }
 }
 
