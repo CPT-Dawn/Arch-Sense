@@ -31,7 +31,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
     .margin(SPACING)
     .areas(area);
 
-    draw_header(frame, header, app);
+    draw_header(frame, header);
     draw_body(frame, body, app);
     draw_footer(frame, footer, app);
 }
@@ -126,75 +126,24 @@ fn blend(a: Color, b: Color, mix: f64) -> Color {
     Color::Rgb(channel(ar, br), channel(ag, bg), channel(ab, bb))
 }
 
-fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
-    let mut block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(Theme::BORDER));
-    
-    // Apply optional background
-    block = match Theme::SURFACE {
-        Some(bg) => block.style(Style::new().bg(bg)),
-        None => block,
-    };
-    
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+fn draw_header(f: &mut Frame, area: Rect) {
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .border_style(Style::new().fg(Theme::ACCENT))
+        .style(Style::new().bg(Theme::BG_HEADER));
 
-    let [brand, indicators] =
-        Layout::horizontal([Constraint::Percentage(56), Constraint::Percentage(44)]).areas(inner);
-
-    let uptime = app.boot_started.elapsed().as_secs_f64();
-    let boot_marker = if uptime < 1.4 {
-        let dots = ((uptime * 8.0) as usize % 4) + 1;
-        format!(" {}", "•".repeat(dots))
-    } else {
-        String::new()
-    };
-
-    let brand_line = Line::from(vec![
-        Span::styled("ARCH-SENSE", Style::new().fg(Theme::TEXT).bold()),
-        Span::styled("  Control Center", Style::new().fg(Theme::MUTED)),
-        Span::styled(boot_marker, Style::new().fg(Theme::ACCENT)),
-    ]);
-    frame.render_widget(Paragraph::new(brand_line), brand);
-
-    let indicators_line = Line::from(vec![
-        badge(
-            "MODULE",
-            if app.module_loaded {
-                "READY"
-            } else {
-                "OFFLINE"
-            },
-            if app.module_loaded {
-                Theme::SUCCESS
-            } else {
-                Theme::DANGER
-            },
+    let text = Line::from(vec![
+        Span::styled("  ◆ ", Style::new().fg(Theme::ACCENT).bold()),
+        Span::styled("A R C H - S E N S E", Style::new().fg(Theme::ACCENT).bold()),
+        Span::styled("  ◆  ", Style::new().fg(Theme::ACCENT)),
+        Span::styled(
+            "Acer Predator Control Center",
+            Style::new().fg(Theme::FG_DIM),
         ),
-        Span::raw(" "),
-        badge(
-            "KB",
-            keyboard_label(&app.keyboard),
-            keyboard_color(&app.keyboard),
-        ),
-    ]);
+    ])
+    .centered();
 
-    frame.render_widget(
-        Paragraph::new(indicators_line).alignment(Alignment::Right),
-        indicators,
-    );
-}
-
-fn badge<'a>(label: &'a str, value: &'a str, color: Color) -> Span<'a> {
-    let mut style = Style::new().fg(color).bold();
-    if let Some(bg) = Theme::ELEVATED {
-        style = style.bg(bg);
-    }
-    Span::styled(
-        format!(" {label}:{value} "),
-        style,
-    )
+    f.render_widget(Paragraph::new(text).block(block), area);
 }
 
 fn keyboard_label(access: &UsbAccess) -> &'static str {
