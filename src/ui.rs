@@ -145,25 +145,22 @@ fn draw_header(f: &mut Frame, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let [title_area, subtitle_area] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
+    let [title_area] = Layout::vertical([Constraint::Length(1)])
         .flex(ratatui::layout::Flex::Center)
         .areas(inner);
 
     let title = Line::from(vec![
         Span::styled("  ◆ ", Style::new().fg(Theme::ACCENT).bold()),
         Span::styled("A R C H - S E N S E", Style::new().fg(Theme::ACCENT).bold()),
-        Span::styled("  ◆ ", Style::new().fg(Theme::ACCENT).bold()),
+        Span::styled("  ◆  ", Style::new().fg(Theme::ACCENT)),
+        Span::styled(
+            "Acer Predator Control Center",
+            Style::new().fg(Theme::MUTED),
+        ),
     ])
     .centered();
 
-    let subtitle = Line::from(Span::styled(
-        "Acer Predator Control Center",
-        Style::new().fg(Theme::FG_DIM),
-    ))
-    .centered();
-
     f.render_widget(Paragraph::new(title), title_area);
-    f.render_widget(Paragraph::new(subtitle), subtitle_area);
 }
 
 fn keyboard_label(access: &UsbAccess) -> &'static str {

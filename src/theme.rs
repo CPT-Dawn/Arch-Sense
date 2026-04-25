@@ -15,7 +15,6 @@ impl Theme {
     
     /// Text colors
     pub(crate) const TEXT: Color = Color::Rgb(226, 232, 240);
-    pub(crate) const FG_DIM: Color = Color::Rgb(148, 163, 184);
     pub(crate) const MUTED: Color = Color::Rgb(148, 163, 184);
     pub(crate) const SUBTLE: Color = Color::Rgb(100, 116, 139);
     
