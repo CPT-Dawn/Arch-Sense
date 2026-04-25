@@ -17,10 +17,10 @@ const DOUBLE_SQUIRCLE_BORDER: symbols::border::Set<'static> = symbols::border::S
     top_right: symbols::line::ROUNDED.top_right,
     bottom_left: symbols::line::ROUNDED.bottom_left,
     bottom_right: symbols::line::ROUNDED.bottom_right,
-    vertical_left: symbols::line::DOUBLE.vertical,
-    vertical_right: symbols::line::DOUBLE.vertical,
-    horizontal_top: symbols::line::DOUBLE.horizontal,
-    horizontal_bottom: symbols::line::DOUBLE.horizontal,
+    vertical_left: symbols::line::ROUNDED.vertical,
+    vertical_right: symbols::line::ROUNDED.vertical,
+    horizontal_top: symbols::line::ROUNDED.horizontal,
+    horizontal_bottom: symbols::line::ROUNDED.horizontal,
 };
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
