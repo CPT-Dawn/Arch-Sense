@@ -556,64 +556,50 @@ impl App {
         RgbField::ALL[self.selected_rgb_field]
     }
 
-    pub(crate) fn context_hint(&self) -> String {
+    pub(crate) fn context_hint(&self) -> Vec<(&'static str, String)> {
         match self.focus {
             FocusPanel::Controls => self.controls_context(),
             FocusPanel::Rgb => self.rgb_context(),
             FocusPanel::Sensors => {
-                "Sparklines show rolling sensor history | r refresh sensors".to_string()
+                vec![("R", "Refresh".to_string())]
             }
         }
     }
 
-    fn controls_context(&self) -> String {
+    fn controls_context(&self) -> Vec<(&'static str, String)> {
         let Some(item) = self.selected_control() else {
-            return "No controls detected | r refresh | q quit".to_string();
+            return vec![("R", "Refresh".to_string()), ("Q", "Quit".to_string())];
         };
 
         if let Some(choice) = item.pending_choice() {
-            return format!(
-                "{} preview: {} | Enter apply | Esc cancel",
-                item.label(),
-                choice.label
-            );
+            return vec![
+                ("Enter", "Apply".to_string()),
+                ("Esc", "Cancel".to_string()),
+            ];
         }
 
         match &item.kind {
             ControlKind::Toggle => {
-                format!("{} | Enter toggle | {}", item.label(), item.description())
+                vec![("Enter", "Toggle".to_string())]
             }
-            ControlKind::Choice(choices) => {
-                let mut labels = choices
-                    .iter()
-                    .take(4)
-                    .map(|choice| choice.label.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" / ");
-                if choices.len() > 4 {
-                    labels.push_str(" / ...");
-                }
-                format!(
-                    "{} | Left/Right [{labels}] | Enter apply | {}",
-                    item.label(),
-                    item.description()
-                )
+            ControlKind::Choice(_) => {
+                vec![
+                    ("Left/Right", "Select".to_string()),
+                    ("Enter", "Apply".to_string()),
+                ]
             }
         }
     }
 
-    fn rgb_context(&self) -> String {
-        let field = self.selected_rgb_field();
-        let dirty = if self.rgb_dirty {
-            " | unsaved preview"
-        } else {
-            ""
-        };
-        format!(
-            "{} | Left/Right adjust | Enter apply to keyboard{}",
-            field.label(),
-            dirty
-        )
+    fn rgb_context(&self) -> Vec<(&'static str, String)> {
+        let mut hints = vec![
+            ("Left/Right", "Adjust".to_string()),
+            ("Enter", "Apply".to_string()),
+        ];
+        if self.rgb_dirty {
+            hints.push(("Unsaved", "Preview".to_string()));
+        }
+        hints
     }
 }
 

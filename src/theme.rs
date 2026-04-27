@@ -10,7 +10,15 @@ impl Theme {
     // -------------------------------------------------------------------------
     pub(crate) const BG: Option<Color> = None;
     pub(crate) const SURFACE: Option<Color> = None;
-    pub(crate) const ELEVATED: Option<Color> = None;
+    pub(crate) const ELEVATED: Option<Color> = Some(Color::Rgb(28, 36, 51));
+
+    // -------------------------------------------------------------------------
+    // Chips & Keys
+    // -------------------------------------------------------------------------
+    pub(crate) const CHIP_BG: Color = Color::Rgb(30, 41, 59); // Slate-800
+    pub(crate) const CHIP_FG: Color = Color::Rgb(148, 163, 184); // Slate-400
+    pub(crate) const CHIP_HIGHLIGHT_BG: Color = Color::Rgb(14, 165, 233); // Sky-500
+    pub(crate) const CHIP_HIGHLIGHT_FG: Color = Color::Rgb(15, 23, 42); // Slate-900
 
     // -------------------------------------------------------------------------
     // Borders
