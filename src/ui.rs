@@ -453,49 +453,35 @@ fn draw_sensors(frame: &mut Frame, area: Rect, app: &App) {
         .margin(SPACING)
         .split(inner)[0];
 
-    let [cpu_t, gpu_t, cpu_f, gpu_f] = Layout::vertical([
-        Constraint::Percentage(25),
-        Constraint::Percentage(25),
-        Constraint::Percentage(25),
-        Constraint::Percentage(25),
+    let [temps_area, fans_area] = Layout::vertical([
+        Constraint::Percentage(50),
+        Constraint::Percentage(50),
     ])
     .spacing(SPACING)
     .areas(content_area);
 
-    draw_metric(
+    draw_overlay_chart(
         frame,
-        cpu_t,
-        "CPU Temperature",
+        temps_area,
+        "Temperatures",
         &app.sensors.cpu_temp,
         &app.sensors.cpu_temp_history,
-        MetricKind::Temp,
-        None,
-    );
-    draw_metric(
-        frame,
-        gpu_t,
-        "GPU Temperature",
         &app.sensors.gpu_temp,
         &app.sensors.gpu_temp_history,
         MetricKind::Temp,
         None,
+        None,
     );
-    draw_metric(
+    draw_overlay_chart(
         frame,
-        cpu_f,
-        "CPU Fan",
+        fans_area,
+        "Fan Speeds",
         &app.sensors.cpu_fan,
         &app.sensors.cpu_fan_history,
-        MetricKind::Fan,
-        Some(app.sensors.cpu_fan_mode),
-    );
-    draw_metric(
-        frame,
-        gpu_f,
-        "GPU Fan",
         &app.sensors.gpu_fan,
         &app.sensors.gpu_fan_history,
         MetricKind::Fan,
+        Some(app.sensors.cpu_fan_mode),
         Some(app.sensors.gpu_fan_mode),
     );
 }
@@ -506,78 +492,118 @@ enum MetricKind {
     Fan,
 }
 
-fn draw_metric(
+fn draw_overlay_chart(
     frame: &mut Frame,
     area: Rect,
-    label: &str,
-    metric: &AnimatedMetric,
-    history: &VecDeque<u64>,
+    title: &str,
+    cpu_metric: &AnimatedMetric,
+    cpu_history: &VecDeque<u64>,
+    gpu_metric: &AnimatedMetric,
+    gpu_history: &VecDeque<u64>,
     kind: MetricKind,
-    mode: Option<FanMode>,
+    cpu_mode: Option<FanMode>,
+    gpu_mode: Option<FanMode>,
 ) {
-    if area.height < 2 {
+    if area.height < 4 {
         return;
     }
 
-    let [top, spark_area] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
+    let [header_area, chart_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
 
-    let value = metric_value(metric, kind);
-    let color = metric_sample_color(kind, metric.value, metric.max);
-
-    let mut top_spans = vec![Span::styled(
-        format!(" {label:<17}"),
-        Style::new().fg(Theme::TEXT_PRIMARY).bold(),
-    )];
-
-    if let Some(mode) = mode {
-        top_spans.push(Span::styled(
-            format!("{} ", mode.label()),
-            Style::new().fg(fan_mode_color(mode)).bold(),
-        ));
-    }
-
-    top_spans.push(Span::styled(value, Style::new().fg(color).bold()));
-
-    if metric.error.is_some() {
-        top_spans.push(Span::styled(
-            " N/A",
-            Style::new().fg(Theme::STATE_ERROR).bold(),
-        ));
-    }
-
-    frame.render_widget(Paragraph::new(Line::from(top_spans)), top);
-
-    let width = spark_area.width.max(1) as usize;
-    let mut data = visible_history(history, width);
-    if data.is_empty() {
-        data = vec![0; width];
-    }
-
-    let bar_color = if metric.error.is_some() {
+    let cpu_color = if cpu_metric.error.is_some() {
         Theme::TEXT_DISABLED
     } else {
-        color
+        metric_sample_color(kind, cpu_metric.value, cpu_metric.max)
+    };
+    let gpu_color = if gpu_metric.error.is_some() {
+        Theme::TEXT_DISABLED
+    } else {
+        metric_sample_color(kind, gpu_metric.value, gpu_metric.max)
     };
 
-    let bars = data
-        .into_iter()
-        .map(|value| {
-            let sample_color = if metric.error.is_some() {
-                bar_color
-            } else {
-                metric_sample_color(kind, value as f64, metric.max)
-            };
-            SparklineBar::from(value).style(Some(Style::new().fg(sample_color)))
-        })
-        .collect::<Vec<_>>();
+    let cpu_val = metric_value(cpu_metric, kind);
+    let gpu_val = metric_value(gpu_metric, kind);
 
-    let sparkline = Sparkline::default()
-        .data(bars)
-        .max(metric.max.round() as u64)
-        .bar_set(symbols::bar::NINE_LEVELS)
-        .style(style_with_bg(Style::new(), Theme::SURFACE));
-    frame.render_widget(sparkline, spark_area);
+    // Header with polished legend
+    let mut header_spans = vec![
+        Span::styled(format!("{title:<14}"), Style::new().fg(Theme::TEXT_PRIMARY).bold()),
+        Span::styled("● ", Style::new().fg(cpu_color)),
+        Span::styled("CPU ", Style::new().fg(Theme::TEXT_SECONDARY)),
+        Span::styled(format!("{cpu_val} "), Style::new().fg(cpu_color).bold()),
+    ];
+
+    if let Some(mode) = cpu_mode {
+        header_spans.push(Span::styled(
+            format!("[{}] ", mode.label()),
+            Style::new().fg(fan_mode_color(mode)),
+        ));
+    }
+
+    header_spans.push(Span::styled(" ● ", Style::new().fg(gpu_color)));
+    header_spans.push(Span::styled("GPU ", Style::new().fg(Theme::TEXT_SECONDARY)));
+    header_spans.push(Span::styled(format!("{gpu_val} "), Style::new().fg(gpu_color).bold()));
+
+    if let Some(mode) = gpu_mode {
+        header_spans.push(Span::styled(
+            format!("[{}]", mode.label()),
+            Style::new().fg(fan_mode_color(mode)),
+        ));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(header_spans)), header_area);
+
+    // Prepare chart data
+    let width = chart_area.width.saturating_sub(6) as usize; // Sub for y-axis labels
+    let cpu_data = visible_history(cpu_history, width);
+    let gpu_data = visible_history(gpu_history, width);
+
+    let cpu_points: Vec<(f64, f64)> = cpu_data
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| (i as f64, v as f64))
+        .collect();
+    let gpu_points: Vec<(f64, f64)> = gpu_data
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| (i as f64, v as f64))
+        .collect();
+
+    let datasets = vec![
+        Dataset::default()
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(cpu_color))
+            .data(&cpu_points),
+        Dataset::default()
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(gpu_color))
+            .data(&gpu_points),
+    ];
+
+    let y_max = cpu_metric.max.max(gpu_metric.max);
+    let chart = Chart::new(datasets)
+        .block(Block::new().padding(Padding::new(1, 1, 0, 0)))
+        .x_axis(
+            Axis::default()
+                .bounds([0.0, width as f64])
+                .labels(vec![
+                    Span::styled("Past", Style::new().fg(Theme::TEXT_TERTIARY)),
+                    Span::styled("Now", Style::new().fg(Theme::TEXT_TERTIARY)),
+                ]),
+        )
+        .y_axis(
+            Axis::default()
+                .bounds([0.0, y_max])
+                .labels(vec![
+                    Span::styled("0", Style::new().fg(Theme::TEXT_TERTIARY)),
+                    Span::styled(format!("{:.0}", y_max / 2.0), Style::new().fg(Theme::TEXT_TERTIARY)),
+                    Span::styled(format!("{:.0}", y_max), Style::new().fg(Theme::TEXT_TERTIARY)),
+                ]),
+        );
+
+    frame.render_widget(chart, chart_area);
 }
 
 fn metric_value(metric: &AnimatedMetric, kind: MetricKind) -> String {
