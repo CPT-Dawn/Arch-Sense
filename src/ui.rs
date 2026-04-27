@@ -318,7 +318,7 @@ fn draw_rgb_rows(frame: &mut Frame, area: Rect, app: &App) {
     ];
 
     let lines = fields
-        .iter()
+        .into_iter()
         .enumerate()
         .map(|(index, (field, value))| {
             let selected = app.focus == FocusPanel::Rgb && index == app.selected_rgb_field;
@@ -339,7 +339,7 @@ fn draw_rgb_rows(frame: &mut Frame, area: Rect, app: &App) {
             Line::from(vec![
                 Span::styled(if selected { "▸ " } else { "  " }, style),
                 Span::styled(format!("{:<11}", field.label()), style),
-                Span::styled(value.clone(), value_style),
+                Span::styled(value, value_style),
             ])
         })
         .collect::<Vec<_>>();
@@ -666,7 +666,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         },
         Span::raw(" "),
         Span::styled(
-            app.message.text.clone(),
+            &app.message.text,
             Style::new().fg(message_color(app.message.level)),
         ),
     ];
@@ -674,7 +674,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     if let Some(note) = &app.hardware_note {
         message_spans.push(Span::styled("  |  ", Style::new().fg(Theme::TEXT_DISABLED)));
         message_spans.push(Span::styled(
-            note.clone(),
+            note,
             Style::new().fg(Theme::TEXT_SECONDARY),
         ));
     }

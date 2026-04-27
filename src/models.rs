@@ -23,15 +23,6 @@ impl FocusPanel {
             Self::Sensors => Self::Rgb,
         }
     }
-
-    #[allow(dead_code)]
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Controls => "Controls",
-            Self::Rgb => "Keyboard RGB",
-            Self::Sensors => "Sensors",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -425,7 +416,7 @@ pub(crate) const RGB_EFFECTS: [RgbEffect; 14] = [
 pub(crate) const OFF_EFFECT_INDEX: usize = 0;
 pub(crate) const DIRECTIONS: [&str; 6] = ["Right", "Left", "Up", "Down", "Clockwise", "Counter-CW"];
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RgbSettings {
     pub(crate) effect_idx: usize,
     pub(crate) color_idx: usize,
@@ -445,7 +436,7 @@ impl RgbSettings {
         }
     }
 
-    pub(crate) fn to_config(&self) -> RgbConfig {
+    pub(crate) fn to_config(self) -> RgbConfig {
         RgbConfig {
             effect: self.effect_idx,
             color: self.color_idx,

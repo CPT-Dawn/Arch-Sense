@@ -279,12 +279,12 @@ impl App {
                 }
                 HardwareEvent::ControlFailed { id, error } => {
                     self.control_pending = None;
-                    self.mark_control_error(id, error.clone());
-                    self.clear_pending_controls();
                     self.set_message(
                         MessageLevel::Error,
                         format!("{} failed: {error}", id.label()),
                     );
+                    self.mark_control_error(id, error);
+                    self.clear_pending_controls();
                 }
                 HardwareEvent::RgbApplied(message) => {
                     self.rgb_pending = false;
@@ -494,7 +494,7 @@ impl App {
 
         match self
             .hardware
-            .send(HardwareRequest::ApplyRgb(self.rgb.clone()))
+            .send(HardwareRequest::ApplyRgb(self.rgb))
         {
             Ok(()) => {
                 self.rgb_pending = true;
