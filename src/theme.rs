@@ -9,9 +9,9 @@ impl Theme {
     // but you can define them if you use filled blocks.
     // -------------------------------------------------------------------------
     pub(crate) const BG: Option<Color> = None;
-    pub(crate) const SURFACE: Option<Color> = None;
-    pub(crate) const ELEVATED: Option<Color> = None;
-
+    pub(crate) const SURFACE: Option<Color> = None; // Subtle background for some elements if needed
+    pub(crate) const ROW_SELECTED_BG: Option<Color> = Some(Color::Rgb(60, 70, 95)); // Distinct background for selected rows
+    
     // -------------------------------------------------------------------------
     // Borders
     // -------------------------------------------------------------------------
@@ -25,6 +25,9 @@ impl Theme {
     // -------------------------------------------------------------------------
     // Typography
     // -------------------------------------------------------------------------
+    pub(crate) const KEYBIND_BG: Color = Color::Rgb(83, 112, 153);
+    pub(crate) const KEYBIND_FG: Color = Color::Rgb(220, 228, 244);
+
     /// High-emphasis readable text.
     pub(crate) const TEXT_PRIMARY: Color = Color::Rgb(220, 228, 244);
     /// Supporting labels and less important values.
@@ -37,6 +40,7 @@ impl Theme {
     // -------------------------------------------------------------------------
     // Accents & Branding
     // -------------------------------------------------------------------------
+    pub(crate) const ROW_MARKER: Color = Color::Rgb(95, 182, 255);
     /// Main brand/accent color for key highlights.
     pub(crate) const BRAND_PRIMARY: Color = Color::Rgb(95, 182, 255);
     /// Secondary accent used for secondary highlights/animations.

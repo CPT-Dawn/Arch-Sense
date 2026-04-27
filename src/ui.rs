@@ -5,8 +5,8 @@ use ratatui::symbols;
 use ratatui::widgets::*;
 
 use crate::app::{AnimatedMetric, App, MessageLevel};
-use crate::models::{FanMode, FocusPanel, Rgb, RgbField, COLOR_PALETTE, RANDOM_COLOR_INDEX};
-use crate::permissions::UsbAccess;
+use crate::models::{FanMode, FocusPanel, Rgb, RgbField};
+
 use crate::theme::Theme;
 
 /// Consistent spacing/padding throughout the UI (in character units)
@@ -93,13 +93,7 @@ fn panel_block<'a>(title: &'a str, panel: FocusPanel, app: &App) -> Block<'a> {
                 Style::new().fg(color).bold(),
             ));
         }
-        FocusPanel::Rgb => {
-            let (label, color) = keyboard_title_status(&app.keyboard);
-            title_spans.push(Span::styled(
-                format!(" {label} "),
-                Style::new().fg(color).bold(),
-            ));
-        }
+        FocusPanel::Rgb => {}
         FocusPanel::Sensors => {}
     }
 
@@ -174,15 +168,6 @@ fn draw_header(f: &mut Frame, area: Rect) {
     f.render_widget(Paragraph::new(title), title_area);
 }
 
-fn keyboard_title_status(access: &UsbAccess) -> (&'static str, Color) {
-    match access {
-        UsbAccess::Accessible => ("Detected ✅", Theme::TEXT_SECONDARY),
-        UsbAccess::PermissionDenied => ("Permission Denied 🔒", Theme::STATE_WARNING),
-        UsbAccess::NotFound => ("Not Found ⚠️", Theme::STATE_WARNING),
-        UsbAccess::Error(_) => ("Error 🚫", Theme::STATE_ERROR),
-    }
-}
-
 /// Helper function to apply optional background color to a style
 fn style_with_bg(base: Style, bg: Option<Color>) -> Style {
     match bg {
@@ -201,6 +186,7 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
         .margin(SPACING)
         .split(inner)[0];
 
+        
     if app.controls.is_empty() {
         frame.render_widget(
             Paragraph::new(" Waiting for hardware controls...")
@@ -219,67 +205,70 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
             let selected = app.focus == FocusPanel::Controls && index == app.selected_control;
             let pending = item.pending.is_some();
             let error = item.last_error.is_some();
+            
+            let bg_color = if selected { Theme::ROW_SELECTED_BG } else { None };
+            
             let base_style = if selected {
-                style_with_bg(Style::new().fg(Theme::TEXT_PRIMARY).bold(), Theme::ELEVATED)
+                style_with_bg(Style::new().fg(Theme::TEXT_PRIMARY).bold(), bg_color)
             } else {
-                Style::new().fg(Theme::TEXT_PRIMARY)
-            };
-            let value_style = if error {
-                let base = Style::new().fg(Theme::STATE_ERROR);
-                let bg = if selected {
-                    Theme::ELEVATED
-                } else {
-                    Theme::SURFACE
-                };
-                style_with_bg(base, bg)
-            } else if pending {
-                let base = Style::new().fg(Theme::STATE_WARNING).bold();
-                let bg = if selected {
-                    Theme::ELEVATED
-                } else {
-                    Theme::SURFACE
-                };
-                style_with_bg(base, bg)
-            } else {
-                Style::new().fg(if selected {
-                    Theme::VALUE_SELECTED
-                } else {
-                    Theme::VALUE_PRIMARY
-                })
-            };
-            let marker = if selected { "▸" } else { " " };
-            let state = if app.control_pending == Some(item.id) {
-                "APPLY"
-            } else if pending {
-                "PREVIEW"
-            } else if error {
-                "ERROR"
-            } else {
-                ""
+                Style::new().fg(Theme::TEXT_SECONDARY)
             };
 
-            Row::new(vec![
-                Cell::from(marker).style(base_style),
-                Cell::from(item.label()).style(base_style),
-                Cell::from(item.visible_value()).style(value_style),
-                Cell::from(state).style(Style::new().fg(control_state_color(
+            let value_style = if error {
+                style_with_bg(Style::new().fg(Theme::STATE_ERROR).bold(), bg_color)
+            } else if pending {
+                style_with_bg(Style::new().fg(Theme::STATE_WARNING).bold(), bg_color)
+            } else {
+                style_with_bg(
+                    Style::new().fg(if selected {
+                        Theme::VALUE_SELECTED
+                    } else {
+                        Theme::VALUE_PRIMARY
+                    }),
+                    bg_color,
+                )
+            };
+
+            let marker_style = style_with_bg(Style::new().fg(Theme::ROW_MARKER).bold(), bg_color);
+            let marker = if selected { " ▎" } else { "  " };
+            
+            let state = if app.control_pending == Some(item.id) {
+                " APPLYING "
+            } else if pending {
+                " PREVIEW "
+            } else if error {
+                " ERROR "
+            } else {
+                " "
+            };
+            
+            let state_style = style_with_bg(
+                Style::new().fg(control_state_color(
                     app.control_pending == Some(item.id),
                     pending,
                     error,
-                ))),
+                )).bold(),
+                bg_color,
+            );
+
+            Row::new(vec![
+                Cell::from(marker).style(marker_style),
+                Cell::from(format!(" {}", item.label())).style(base_style),
+                Cell::from(item.visible_value()).style(value_style),
+                Cell::from(state).style(state_style),
             ])
         })
         .collect::<Vec<_>>();
 
     let widths = [
         Constraint::Length(2),
-        Constraint::Percentage(42),
-        Constraint::Percentage(38),
-        Constraint::Length(8),
+        Constraint::Percentage(45),
+        Constraint::Percentage(35),
+        Constraint::Length(10),
     ];
 
     frame.render_widget(
-        Table::new(rows, widths).column_spacing(SPACING),
+        Table::new(rows, widths).column_spacing(1),
         content_area,
     );
 }
@@ -294,17 +283,7 @@ fn draw_rgb(frame: &mut Frame, area: Rect, app: &App) {
         .margin(SPACING)
         .split(inner)[0];
 
-    let [rows_area, palette_area, preview_area] = Layout::vertical([
-        Constraint::Min(5),
-        Constraint::Length(1),
-        Constraint::Length(2),
-    ])
-    .spacing(SPACING)
-    .areas(content_area);
-
-    draw_rgb_rows(frame, rows_area, app);
-    draw_palette(frame, palette_area, app);
-    draw_rgb_preview(frame, preview_area, app);
+    draw_rgb_rows(frame, content_area, app);
 }
 
 fn draw_rgb_rows(frame: &mut Frame, area: Rect, app: &App) {
@@ -322,23 +301,26 @@ fn draw_rgb_rows(frame: &mut Frame, area: Rect, app: &App) {
         .enumerate()
         .map(|(index, (field, value))| {
             let selected = app.focus == FocusPanel::Rgb && index == app.selected_rgb_field;
-            let style = if selected {
-                style_with_bg(Style::new().fg(Theme::TEXT_PRIMARY).bold(), Theme::ELEVATED)
+            let bg_color = if selected { Theme::ROW_SELECTED_BG } else { None };
+
+            let marker_style = style_with_bg(Style::new().fg(Theme::ROW_MARKER).bold(), bg_color);
+            let marker = if selected { " ▎" } else { "  " };
+
+            let label_style = if selected {
+                style_with_bg(Style::new().fg(Theme::TEXT_PRIMARY).bold(), bg_color)
             } else {
-                Style::new().fg(Theme::TEXT_PRIMARY)
+                Style::new().fg(Theme::TEXT_SECONDARY)
             };
+
             let value_style = if selected {
-                style_with_bg(
-                    Style::new().fg(Theme::VALUE_SELECTED).bold(),
-                    Theme::ELEVATED,
-                )
+                style_with_bg(Style::new().fg(Theme::VALUE_SELECTED).bold(), bg_color)
             } else {
                 Style::new().fg(Theme::VALUE_PRIMARY)
             };
 
             Line::from(vec![
-                Span::styled(if selected { "▸ " } else { "  " }, style),
-                Span::styled(format!("{:<11}", field.label()), style),
+                Span::styled(marker, marker_style),
+                Span::styled(format!(" {:<12}", field.label()), label_style),
                 Span::styled(value, value_style),
             ])
         })
@@ -361,86 +343,6 @@ fn direction_value(app: &App) -> String {
     } else {
         "Not used".to_string()
     }
-}
-
-fn draw_palette(frame: &mut Frame, area: Rect, app: &App) {
-    let mut swatches = vec![Span::styled(
-        " Palette ",
-        Style::new().fg(Theme::TEXT_SECONDARY),
-    )];
-    for (index, color) in COLOR_PALETTE.iter().enumerate() {
-        let selected = index == app.rgb.color_idx;
-        let bg = if selected {
-            Theme::ELEVATED
-        } else {
-            Theme::SURFACE
-        };
-        let style = if index == RANDOM_COLOR_INDEX {
-            style_with_bg(Style::new().fg(Theme::BRAND_TERTIARY).bold(), bg)
-        } else {
-            style_with_bg(Style::new().fg(to_color(color.rgb)).bold(), bg)
-        };
-        swatches.push(Span::styled(if selected { "▣" } else { "■" }, style));
-        swatches.push(Span::raw(" "));
-    }
-
-    frame.render_widget(Paragraph::new(Line::from(swatches)), area);
-}
-
-fn draw_rgb_preview(frame: &mut Frame, area: Rect, app: &App) {
-    let mut lines = Vec::new();
-    let status = match &app.keyboard {
-        UsbAccess::Accessible => {
-            if app.rgb_pending {
-                Span::styled("Applying", Style::new().fg(Theme::STATE_WARNING).bold())
-            } else if app.rgb_dirty {
-                Span::styled("Preview", Style::new().fg(Theme::STATE_INFO).bold())
-            } else {
-                Span::styled("Ready", Style::new().fg(Theme::STATE_SUCCESS).bold())
-            }
-        }
-        UsbAccess::PermissionDenied => {
-            Span::styled("USB locked", Style::new().fg(Theme::STATE_WARNING).bold())
-        }
-        UsbAccess::NotFound => Span::styled(
-            "Keyboard missing",
-            Style::new().fg(Theme::STATE_WARNING).bold(),
-        ),
-        UsbAccess::Error(_) => {
-            Span::styled("USB error", Style::new().fg(Theme::STATE_ERROR).bold())
-        }
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(" State ", Style::new().fg(Theme::TEXT_SECONDARY)),
-        status,
-    ]));
-    lines.push(Line::from(rgb_preview_spans(
-        app,
-        area.width.saturating_sub(2) as usize,
-    )));
-
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-fn rgb_preview_spans(app: &App, width: usize) -> Vec<Span<'static>> {
-    let effect = app.rgb.effect();
-    let width = width.clamp(12, 48);
-    let mut spans = Vec::with_capacity(width);
-
-    for i in 0..width {
-        let color = if app.rgb.effect_idx == 0 {
-            Theme::TEXT_DISABLED
-        } else if effect.has_color && app.rgb.color_idx != RANDOM_COLOR_INDEX {
-            to_color(app.rgb.color().rgb)
-        } else {
-            let offset = ((app.rgb_phase as usize / 2) + i) % (COLOR_PALETTE.len() - 1);
-            to_color(COLOR_PALETTE[offset].rgb)
-        };
-        spans.push(Span::styled("━", Style::new().fg(color).bold()));
-    }
-
-    spans
 }
 
 fn draw_sensors(frame: &mut Frame, area: Rect, app: &App) {
@@ -589,7 +491,7 @@ fn draw_overlay_chart(
             Axis::default()
                 .bounds([0.0, width as f64])
                 .labels(vec![
-                    Span::styled("Past", Style::new().fg(Theme::TEXT_TERTIARY)),
+                    Span::styled("", Style::new().fg(Theme::TEXT_TERTIARY)),
                     Span::styled("Now", Style::new().fg(Theme::TEXT_TERTIARY)),
                 ]),
         )
@@ -662,17 +564,37 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         .spacing(SPACING)
         .areas(inner);
 
+    let key_bg = Some(Theme::KEYBIND_BG);
+    let key_fg = Theme::KEYBIND_FG;
+    let action_fg = Theme::TEXT_SECONDARY;
+    let separator_fg = Theme::TEXT_DISABLED;
+
+    let key_style = style_with_bg(Style::new().fg(key_fg).bold(), key_bg);
+    let action_style = Style::new().fg(action_fg);
+    let separator_style = Style::new().fg(separator_fg);
+
+    let mut context_spans = vec![
+        Span::styled(" Tab ", key_style),
+        Span::styled(" Switch Panels   ", action_style),
+        
+        Span::styled(" R ", key_style),
+        Span::styled(" Refresh   ", action_style),
+        
+        Span::styled(" Q ", key_style),
+        Span::styled(" Quit   ", action_style),
+        
+        Span::styled(" ↵ ", key_style),
+        Span::styled(" Apply   ", action_style),
+    ];
+    
+    let hint = app.context_hint();
+    if !hint.is_empty() {
+        context_spans.push(Span::styled("│   ", separator_style));
+        context_spans.push(Span::styled(hint, Style::new().fg(Theme::TEXT_PRIMARY).bold()));
+    }
+
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("Tab switch panels", Style::new().fg(Theme::TEXT_SECONDARY)),
-            Span::styled(
-                "  |  r refresh  |  ",
-                Style::new().fg(Theme::TEXT_SECONDARY),
-            ),
-            Span::styled("q quit", Style::new().fg(Theme::TEXT_SECONDARY)),
-            Span::styled("  |  ", Style::new().fg(Theme::TEXT_DISABLED)),
-            Span::styled(app.context_hint(), Style::new().fg(Theme::TEXT_PRIMARY)),
-        ])),
+        Paragraph::new(Line::from(context_spans)),
         context,
     );
 
@@ -698,7 +620,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     ];
 
     if let Some(note) = &app.hardware_note {
-        message_spans.push(Span::styled("  |  ", Style::new().fg(Theme::TEXT_DISABLED)));
+        message_spans.push(Span::styled("  │  ", separator_style));
         message_spans.push(Span::styled(
             note,
             Style::new().fg(Theme::TEXT_SECONDARY),
@@ -738,6 +660,5 @@ fn control_state_color(applying: bool, pending: bool, error: bool) -> Color {
     }
 }
 
-fn to_color(rgb: Rgb) -> Color {
-    Color::Rgb(rgb.r, rgb.g, rgb.b)
-}
+
+
