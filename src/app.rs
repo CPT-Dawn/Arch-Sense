@@ -547,6 +547,10 @@ impl App {
             text: text.into(),
         };
     }
+
+    pub(crate) fn selected_control(&self) -> Option<&ControlItem> {
+        self.controls.get(self.selected_control)
+    }
 }
 
 impl Drop for App {

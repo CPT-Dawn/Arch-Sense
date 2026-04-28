@@ -615,41 +615,82 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 
     frame.render_widget(block, area);
 
-    // Modern Navigation Hints
-    // Order: Up/Down -> Left/Right -> Enter -> Tab -> Q
-    let mut hints = vec![
-        // Navigation (Up/Down)
-        Span::styled(" ↑↓ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
-        Span::styled("Navigate ", Style::new().fg(Theme::TEXT_SECONDARY)),
-        Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
+    let mut hints = Vec::new();
 
-        // Options (Left/Right)
-        Span::styled(" ←→ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
-        Span::styled("Adjust ", Style::new().fg(Theme::TEXT_SECONDARY)),
-        Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
+    // 1. Navigation & Selection (Context Sensitive)
+    match app.focus {
+        FocusPanel::Controls => {
+            hints.extend(vec![
+                Span::styled(" ↑↓ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+                Span::styled("Select Control ", Style::new().fg(Theme::TEXT_SECONDARY)),
+                Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
+            ]);
 
-        // Action (Enter)
-        Span::styled(" ↵ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
-        Span::styled("Confirm ", Style::new().fg(Theme::TEXT_SECONDARY)),
-        Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
+            if let Some(control) = app.selected_control() {
+                match &control.kind {
+                    crate::models::ControlKind::Toggle => {
+                        hints.extend(vec![
+                            Span::styled(" ↵ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+                            Span::styled(format!("Toggle {} ", control.label()), Style::new().fg(Theme::TEXT_SECONDARY)),
+                            Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
+                        ]);
+                    }
+                    crate::models::ControlKind::Choice(_) => {
+                        hints.extend(vec![
+                            Span::styled(" ←→ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+                            Span::styled(format!("Choose {} ", control.label()), Style::new().fg(Theme::TEXT_SECONDARY)),
+                            Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
+                            Span::styled(" ↵ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+                            Span::styled("Apply ", Style::new().fg(Theme::TEXT_SECONDARY)),
+                            Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
+                        ]);
+                    }
+                }
+            }
+        }
+        FocusPanel::Rgb => {
+            hints.extend(vec![
+                Span::styled(" ↑↓ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+                Span::styled("Select Field ", Style::new().fg(Theme::TEXT_SECONDARY)),
+                Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
+                Span::styled(" ←→ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+                Span::styled("Adjust Value ", Style::new().fg(Theme::TEXT_SECONDARY)),
+                Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
+            ]);
 
-        // Switch (Tab)
+            if app.rgb_dirty {
+                hints.extend(vec![
+                    Span::styled(" ↵ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+                    Span::styled("Apply RGB Changes ", Style::new().fg(Theme::TEXT_SECONDARY)),
+                    Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
+                ]);
+            }
+        }
+        FocusPanel::Sensors => {
+            hints.extend(vec![
+                Span::styled(" R ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+                Span::styled("Refresh Sensors ", Style::new().fg(Theme::TEXT_SECONDARY)),
+                Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
+            ]);
+        }
+    }
+
+    // 2. Global Navigation (Always present but at the end)
+    hints.extend(vec![
         Span::styled(" ⇥ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
         Span::styled("Switch Panel ", Style::new().fg(Theme::TEXT_SECONDARY)),
         Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
-
-        // Quit (Q)
         Span::styled(" q ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
         Span::styled("Quit ", Style::new().fg(Theme::TEXT_SECONDARY)),
-    ];
+    ]);
 
-    // Status / Logs Section
+    // 3. Status Section
     hints.push(Span::styled("  │  ", Style::new().fg(Theme::BORDER_IDLE)));
     
     let status_color = message_color(app.message.level);
     hints.push(Span::styled(" ● ", Style::new().fg(status_color)));
     hints.push(Span::styled(
-        format!("{:<24}", app.message.text), // Reserve space for stability
+        &app.message.text,
         Style::new().fg(Theme::TEXT_PRIMARY),
     ));
 
