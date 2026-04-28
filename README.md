@@ -15,7 +15,7 @@
 </p>
 
 ---
-
+<img width="1920" height="1080" alt="arch-sense" src="https://github.com/user-attachments/assets/a437fc34-0c00-40aa-b83e-4bf4d230cdda" />
 ## Overview
 
 **Arch-Sense** is a terminal-based control center that replaces Acer's Windows-only PredatorSense utility on Arch Linux. It communicates directly with the hardware through:
