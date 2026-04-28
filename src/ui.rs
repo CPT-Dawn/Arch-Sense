@@ -27,39 +27,47 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
     // Don't force a background color - let the terminal's default show through
-    // This enables transparency/blur support and respects the user's terminal theme
     let base_style = match Theme::BG {
         Some(bg) => Style::new().bg(bg),
         None => Style::new(),
     };
     frame.render_widget(Block::new().style(base_style), area);
 
-    let [header, body, footer] = Layout::vertical([
-        Constraint::Length(5),
-        Constraint::Min(18),
-        Constraint::Length(4),
+    let [header_area, body_area, footer_area] = Layout::vertical([
+        Constraint::Length(3), // Slimmer header
+        Constraint::Min(0),
+        Constraint::Length(4), // Slimmer footer
     ])
     .margin(SPACING)
     .areas(area);
 
-    draw_header(frame, header);
-    draw_body(frame, body, app);
-    draw_footer(frame, footer, app);
+    // Center the header and footer blocks horizontally for a "floating" look
+    let [header_floating] = Layout::horizontal([Constraint::Percentage(70)])
+        .flex(ratatui::layout::Flex::Center)
+        .areas(header_area);
+
+    let [footer_floating] = Layout::horizontal([Constraint::Percentage(80)])
+        .flex(ratatui::layout::Flex::Center)
+        .areas(footer_area);
+
+    draw_header(frame, header_floating);
+    draw_body(frame, body_area, app);
+    draw_footer(frame, footer_floating, app);
 }
 
 fn draw_body(frame: &mut Frame, area: Rect, app: &App) {
-    let [left, _, right] = Layout::horizontal([
-        Constraint::Percentage(42),
-        Constraint::Length(SPACING),
-        Constraint::Percentage(58),
+    let [left, right] = Layout::horizontal([
+        Constraint::Percentage(45),
+        Constraint::Percentage(55),
     ])
+    .spacing(SPACING)
     .areas(area);
 
-    let [controls, _, rgb] = Layout::vertical([
-        Constraint::Percentage(58),
-        Constraint::Length(SPACING),
-        Constraint::Percentage(42),
+    let [controls, rgb] = Layout::vertical([
+        Constraint::Percentage(55),
+        Constraint::Percentage(45),
     ])
+    .spacing(SPACING)
     .areas(left);
 
     draw_controls(frame, controls, app);
@@ -83,7 +91,16 @@ fn panel_block<'a>(title: &'a str, panel: FocusPanel, app: &App) -> Block<'a> {
         })
         .bold();
 
-    let mut title_spans = vec![Span::styled(format!(" {title} "), title_style)];
+    let icon = match panel {
+        FocusPanel::Controls => " ⚙ ",
+        FocusPanel::Rgb => " ⌨ ",
+        FocusPanel::Sensors => " 📊 ",
+    };
+
+    let mut title_spans = vec![
+        Span::styled(icon, Style::new().fg(Theme::BRAND_PRIMARY)),
+        Span::styled(format!("{title} "), title_style),
+    ];
 
     match panel {
         FocusPanel::Controls => {
@@ -153,17 +170,13 @@ fn draw_header(f: &mut Frame, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let [title_area] = Layout::vertical([Constraint::Length(1)])
-        .flex(ratatui::layout::Flex::Center)
-        .areas(inner);
-
     let title = Line::from(vec![
-        Span::styled("  ◆ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+        Span::styled(" ◆ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
         Span::styled(
             "A R C H - S E N S E",
             Style::new().fg(Theme::BRAND_PRIMARY).bold(),
         ),
-        Span::styled("  ◆  ", Style::new().fg(Theme::BRAND_SECONDARY)),
+        Span::styled(" ◆ ", Style::new().fg(Theme::BRAND_SECONDARY)),
         Span::styled(
             "Acer Predator Control Center",
             Style::new().fg(Theme::TEXT_SECONDARY),
@@ -171,7 +184,7 @@ fn draw_header(f: &mut Frame, area: Rect) {
     ])
     .centered();
 
-    f.render_widget(Paragraph::new(title), title_area);
+    f.render_widget(Paragraph::new(title), inner);
 }
 
 fn keyboard_title_status(access: &UsbAccess) -> (&'static str, Color) {
@@ -370,26 +383,26 @@ fn direction_value(app: &App) -> String {
 
 fn draw_palette(frame: &mut Frame, area: Rect, app: &App) {
     let mut swatches = vec![Span::styled(
-        " Palette ",
+        " 🎨 Palette  ",
         Style::new().fg(Theme::TEXT_SECONDARY),
     )];
     for (index, color) in COLOR_PALETTE.iter().enumerate() {
         let selected = index == app.rgb.color_idx;
-        let bg = if selected {
-            Theme::ELEVATED
-        } else {
-            Theme::SURFACE
-        };
         let style = if index == RANDOM_COLOR_INDEX {
-            style_with_bg(Style::new().fg(Theme::BRAND_TERTIARY).bold(), bg)
+            Style::new().fg(Theme::BRAND_TERTIARY).bold()
         } else {
-            style_with_bg(Style::new().fg(to_color(color.rgb)).bold(), bg)
+            Style::new().fg(to_color(color.rgb)).bold()
         };
-        swatches.push(Span::styled(if selected { "▣" } else { "■" }, style));
+
+        if selected {
+            swatches.push(Span::styled("●", style));
+        } else {
+            swatches.push(Span::styled("○", style));
+        }
         swatches.push(Span::raw(" "));
     }
 
-    frame.render_widget(Paragraph::new(Line::from(swatches)), area);
+    frame.render_widget(Paragraph::new(Line::from(swatches)).centered(), area);
 }
 
 fn draw_sensors(frame: &mut Frame, area: Rect, app: &App) {
@@ -453,12 +466,14 @@ fn draw_overlay_chart(
     cpu_mode: Option<FanMode>,
     gpu_mode: Option<FanMode>,
 ) {
-    if area.height < 4 {
+    if area.height < 5 {
         return;
     }
 
     let [header_area, chart_area] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0)])
+        .spacing(1) // Add space between header and chart
+        .areas(area);
 
     let cpu_color = if cpu_metric.error.is_some() {
         Theme::TEXT_DISABLED
@@ -608,7 +623,6 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(block, area);
 
     let [context, message] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
-        .spacing(SPACING)
         .areas(inner);
 
     let mut context_spans = vec![
@@ -617,17 +631,21 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         Span::raw("   "),
         Span::styled(" [Q] ", Style::new().bg(Theme::CHIP_BG).fg(Theme::CHIP_FG).bold()),
         Span::styled(" Quit ", Style::new().fg(Theme::TEXT_SECONDARY)),
-        Span::styled("  |  ", Style::new().fg(Theme::BORDER_IDLE)),
     ];
 
-    for (key, action) in app.context_hint() {
+    let context_hints = app.context_hint();
+    if !context_hints.is_empty() {
+        context_spans.push(Span::styled("  |  ", Style::new().fg(Theme::BORDER_IDLE)));
+    }
+
+    for (key, action) in context_hints {
         context_spans.push(Span::styled(format!(" [{key}] "), Style::new().bg(Theme::CHIP_HIGHLIGHT_BG).fg(Theme::CHIP_HIGHLIGHT_FG).bold()));
         context_spans.push(Span::styled(format!(" {action} "), Style::new().fg(Theme::TEXT_PRIMARY)));
         context_spans.push(Span::raw("  "));
     }
 
     frame.render_widget(
-        Paragraph::new(Line::from(context_spans)),
+        Paragraph::new(Line::from(context_spans)).centered(),
         context,
     );
 
@@ -660,7 +678,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         ));
     }
 
-    frame.render_widget(Paragraph::new(Line::from(message_spans)), message);
+    frame.render_widget(Paragraph::new(Line::from(message_spans)).centered(), message);
 }
 
 fn message_level(level: MessageLevel) -> &'static str {
