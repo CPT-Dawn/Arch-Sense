@@ -93,28 +93,10 @@ fn panel_block<'a>(title: &'a str, panel: FocusPanel, app: &App) -> Block<'a> {
         FocusPanel::Sensors => " 📊 ",
     };
 
-    let mut title_spans = vec![
+    let title_spans = vec![
         Span::styled(icon, Style::new().fg(Theme::BRAND_PRIMARY)),
         Span::styled(format!("{title} "), title_style),
     ];
-
-    match panel {
-        FocusPanel::Controls => {
-            let (label, color) = module_title_status(app.module_loaded);
-            title_spans.push(Span::styled(
-                format!(" {label} "),
-                Style::new().fg(color).bold(),
-            ));
-        }
-        FocusPanel::Rgb => {
-            let (label, color) = keyboard_title_status(&app.keyboard);
-            title_spans.push(Span::styled(
-                format!(" {label} "),
-                Style::new().fg(color).bold(),
-            ));
-        }
-        FocusPanel::Sensors => {}
-    }
 
     // Apply background color only if it's Some, otherwise use terminal default
     let mut block = Block::bordered()
@@ -129,14 +111,6 @@ fn panel_block<'a>(title: &'a str, panel: FocusPanel, app: &App) -> Block<'a> {
     };
 
     block
-}
-
-fn module_title_status(module_loaded: bool) -> (&'static str, Color) {
-    if module_loaded {
-        ("Detected ✅", Theme::TEXT_SECONDARY)
-    } else {
-        ("Kernel Missing ❌", Theme::STATE_ERROR)
-    }
 }
 
 fn pulse_color(app: &App, base: Color, pulse: Color) -> Color {
@@ -184,15 +158,6 @@ fn draw_header(f: &mut Frame, area: Rect) {
     // Vertically center text in the 5-row area (row 2 is middle)
     let title_area = Rect::new(area.x, area.y + 1, area.width, 1);
     f.render_widget(Paragraph::new(title), title_area);
-}
-
-fn keyboard_title_status(access: &UsbAccess) -> (&'static str, Color) {
-    match access {
-        UsbAccess::Accessible => ("Detected ✅", Theme::TEXT_SECONDARY),
-        UsbAccess::PermissionDenied => ("Permission Denied 🔒", Theme::STATE_WARNING),
-        UsbAccess::NotFound => ("Not Found ⚠️", Theme::STATE_WARNING),
-        UsbAccess::Error(_) => ("Error 🚫", Theme::STATE_ERROR),
-    }
 }
 
 /// Helper function to apply optional background color to a style
@@ -687,10 +652,27 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     // 3. Status Section
     hints.push(Span::styled("  │  ", Style::new().fg(Theme::BORDER_IDLE)));
     
-    let status_color = message_color(app.message.level);
+    // Determine system status: prioritize hardware errors over message logs
+    let (status_color, status_text) = if !app.module_loaded {
+        (Theme::STATE_ERROR, "Kernel Module Missing")
+    } else {
+        match &app.keyboard {
+            UsbAccess::PermissionDenied => (Theme::STATE_WARNING, "USB Permission Denied"),
+            UsbAccess::NotFound => (Theme::STATE_WARNING, "Keyboard Not Found"),
+            UsbAccess::Error(e) => (Theme::STATE_ERROR, e.as_str()),
+            UsbAccess::Accessible => {
+                if app.message.level == crate::app::MessageLevel::Info || app.message.level == crate::app::MessageLevel::Success {
+                     (Theme::STATE_SUCCESS, "Ready")
+                } else {
+                     (message_color(app.message.level), app.message.text.as_str())
+                }
+            }
+        }
+    };
+
     hints.push(Span::styled(" ● ", Style::new().fg(status_color)));
     hints.push(Span::styled(
-        &app.message.text,
+        status_text,
         Style::new().fg(Theme::TEXT_PRIMARY),
     ));
 
