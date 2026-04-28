@@ -547,56 +547,6 @@ impl App {
             text: text.into(),
         };
     }
-
-    pub(crate) fn selected_control(&self) -> Option<&ControlItem> {
-        self.controls.get(self.selected_control)
-    }
-
-    pub(crate) fn context_hint(&self) -> Vec<(&'static str, String)> {
-        match self.focus {
-            FocusPanel::Controls => self.controls_context(),
-            FocusPanel::Rgb => self.rgb_context(),
-            FocusPanel::Sensors => {
-                vec![("R", "Refresh".to_string())]
-            }
-        }
-    }
-
-    fn controls_context(&self) -> Vec<(&'static str, String)> {
-        let Some(item) = self.selected_control() else {
-            return vec![("R", "Refresh".to_string()), ("Q", "Quit".to_string())];
-        };
-
-        if let Some(_choice) = item.pending_choice() {
-            return vec![
-                ("Enter", "Apply".to_string()),
-                ("Esc", "Cancel".to_string()),
-            ];
-        }
-
-        match &item.kind {
-            ControlKind::Toggle => {
-                vec![("Enter", "Toggle".to_string())]
-            }
-            ControlKind::Choice(_) => {
-                vec![
-                    ("Left/Right", "Select".to_string()),
-                    ("Enter", "Apply".to_string()),
-                ]
-            }
-        }
-    }
-
-    fn rgb_context(&self) -> Vec<(&'static str, String)> {
-        let mut hints = vec![
-            ("Left/Right", "Adjust".to_string()),
-            ("Enter", "Apply".to_string()),
-        ];
-        if self.rgb_dirty {
-            hints.push(("Unsaved", "Preview".to_string()));
-        }
-        hints
-    }
 }
 
 impl Drop for App {

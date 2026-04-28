@@ -172,13 +172,14 @@ fn draw_header(f: &mut Frame, area: Rect) {
             "A R C H - S E N S E",
             Style::new().fg(Theme::BRAND_PRIMARY).bold(),
         ),
-        Span::styled(" ◆ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+        Span::styled(" ◆ ", Style::new().fg(Theme::BRAND_PRIMARY)),
         Span::styled(
             "Acer Predator Control Center",
             Style::new().fg(Theme::TEXT_SECONDARY),
         ),
     ])
     .centered();
+
 
     // Vertically center text in the 5-row area (row 2 is middle)
     let title_area = Rect::new(area.x, area.y + 1, area.width, 1);
@@ -203,7 +204,7 @@ fn style_with_bg(base: Style, bg: Option<Color>) -> Style {
 }
 
 fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
-    let block = panel_block("Controls", FocusPanel::Controls, app);
+    let block = panel_block(" Controls", FocusPanel::Controls, app);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -614,46 +615,55 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 
     frame.render_widget(block, area);
 
-    let mut context_spans = vec![
-        Span::styled(" [Tab] ", Style::new().bg(Theme::CHIP_BG).fg(Theme::CHIP_FG).bold()),
-        Span::styled(" Switch Panel ", Style::new().fg(Theme::TEXT_SECONDARY)),
-        Span::raw("   "),
-        Span::styled(" [Q] ", Style::new().bg(Theme::CHIP_BG).fg(Theme::CHIP_FG).bold()),
-        Span::styled(" Quit ", Style::new().fg(Theme::TEXT_SECONDARY)),
+    // Modern Navigation Hints
+    // Order: Up/Down -> Left/Right -> Enter -> Tab -> Q
+    let mut hints = vec![
+        // Navigation (Up/Down)
+        Span::styled(" ↑↓ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+        Span::styled("Navigate ", Style::new().fg(Theme::TEXT_SECONDARY)),
+        Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
+
+        // Options (Left/Right)
+        Span::styled(" ←→ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+        Span::styled("Adjust ", Style::new().fg(Theme::TEXT_SECONDARY)),
+        Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
+
+        // Action (Enter)
+        Span::styled(" ↵ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+        Span::styled("Confirm ", Style::new().fg(Theme::TEXT_SECONDARY)),
+        Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
+
+        // Switch (Tab)
+        Span::styled(" ⇥ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+        Span::styled("Switch Panel ", Style::new().fg(Theme::TEXT_SECONDARY)),
+        Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
+
+        // Quit (Q)
+        Span::styled(" q ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
+        Span::styled("Quit ", Style::new().fg(Theme::TEXT_SECONDARY)),
     ];
 
-    let context_hints = app.context_hint();
-    if !context_hints.is_empty() {
-        context_spans.push(Span::styled("  |  ", Style::new().fg(Theme::BORDER_IDLE)));
-    }
-
-    for (key, action) in context_hints {
-        context_spans.push(Span::styled(format!(" [{key}] "), Style::new().bg(Theme::CHIP_HIGHLIGHT_BG).fg(Theme::CHIP_HIGHLIGHT_FG).bold()));
-        context_spans.push(Span::styled(format!(" {action} "), Style::new().fg(Theme::TEXT_PRIMARY)));
-        context_spans.push(Span::raw("  "));
-    }
-
-    // Status message with simple colored indicator instead of a heavy chip
-    context_spans.push(Span::styled("  |  ", Style::new().fg(Theme::BORDER_IDLE)));
-    context_spans.push(Span::styled(" ● ", Style::new().fg(message_color(app.message.level))));
-    context_spans.push(Span::styled(
-        &app.message.text,
-        Style::new().fg(Theme::TEXT_SECONDARY),
+    // Status / Logs Section
+    hints.push(Span::styled("  │  ", Style::new().fg(Theme::BORDER_IDLE)));
+    
+    let status_color = message_color(app.message.level);
+    hints.push(Span::styled(" ● ", Style::new().fg(status_color)));
+    hints.push(Span::styled(
+        format!("{:<24}", app.message.text), // Reserve space for stability
+        Style::new().fg(Theme::TEXT_PRIMARY),
     ));
 
     if let Some(note) = &app.hardware_note {
-        context_spans.push(Span::styled("  (", Style::new().fg(Theme::TEXT_DISABLED)));
-        context_spans.push(Span::styled(
-            note,
-            Style::new().fg(Theme::TEXT_DISABLED),
+        hints.push(Span::styled(
+            format!(" ({})", note),
+            Style::new().fg(Theme::TEXT_DISABLED).italic(),
         ));
-        context_spans.push(Span::styled(")", Style::new().fg(Theme::TEXT_DISABLED)));
     }
 
     // Render content on row 2 (middle of the 5-row footer area)
     let content_area = Rect::new(area.x, area.y + 2, area.width, 1);
     frame.render_widget(
-        Paragraph::new(Line::from(context_spans)).centered(),
+        Paragraph::new(Line::from(hints)).centered(),
         content_area,
     );
 }

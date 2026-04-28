@@ -13,14 +13,6 @@ impl Theme {
     pub(crate) const ELEVATED: Option<Color> = Some(Color::Rgb(28, 36, 51));
 
     // -------------------------------------------------------------------------
-    // Chips & Keys
-    // -------------------------------------------------------------------------
-    pub(crate) const CHIP_BG: Color = Color::Rgb(30, 41, 59); // Slate-800
-    pub(crate) const CHIP_FG: Color = Color::Rgb(148, 163, 184); // Slate-400
-    pub(crate) const CHIP_HIGHLIGHT_BG: Color = Color::Rgb(14, 165, 233); // Sky-500
-    pub(crate) const CHIP_HIGHLIGHT_FG: Color = Color::Rgb(15, 23, 42); // Slate-900
-
-    // -------------------------------------------------------------------------
     // Borders
     // -------------------------------------------------------------------------
     /// Global frame border for header/footer framing.
@@ -47,8 +39,6 @@ impl Theme {
     // -------------------------------------------------------------------------
     /// Main brand/accent color for key highlights.
     pub(crate) const BRAND_PRIMARY: Color = Color::Rgb(95, 182, 255);
-    /// Secondary accent used for secondary highlights/animations.
-    pub(crate) const BRAND_SECONDARY: Color = Color::Rgb(80, 224, 214);
     /// Tertiary accent for animated pulse blending.
     pub(crate) const BRAND_TERTIARY: Color = Color::Rgb(160, 149, 245);
 
