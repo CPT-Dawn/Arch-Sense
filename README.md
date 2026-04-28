@@ -18,56 +18,50 @@
 
 ## Overview
 
-**Arch-Sense** is a terminal-based control center that replaces Acer's Windows-only PredatorSense utility on Arch Linux. It communicates directly with hardware through:
+**Arch-Sense** is a terminal-based control center that replaces Acer's Windows-only PredatorSense utility on Arch Linux. It communicates directly with the hardware through:
 
 - **sysfs** — via the [`linuwu_sense`](https://github.com/0x7375646F/Linuwu-Sense) kernel module for thermal profiles, fan speeds, battery management, and hardware toggles.
 - **USB HID** — via `libusb` for keyboard RGB lighting control on the Acer Predator PH16-71, ported from the [`ph16-71-rgb`](https://github.com/Order52/ph16-71-rgb) Python project to native Rust.
 
-Built with [`ratatui`](https://github.com/ratatui/ratatui) as a modern single-screen TUI with a dark professional palette, animated gauges, keyboard-first navigation, and a non-blocking hardware worker.
+Built with [`ratatui`](https://github.com/ratatui/ratatui) as a modern single-screen TUI with a dark professional palette, animated gauges, keyboard-first navigation, and a non-blocking hardware worker thread.
 
 ---
 
 ## Features
 
-### Controls Panel (`F1`)
+### ⚙ Controls Panel
 
 | Control | Description |
 |---|---|
-| **Thermal Profile** | Switch between `Quiet`, `Balanced`, `Performance`, and `Low-Power` modes |
-| **Fan Speed** | Manual override — Auto / Low (30%) / Medium (50%) / High (70%) / Max (100%) for CPU & GPU |
-| **Battery Limiter** | Cap charging at 80% for battery longevity |
-| **Battery Calibration** | Trigger battery calibration cycle (keep AC connected) |
-| **Backlight Timeout** | Auto-disable keyboard RGB after 30s idle |
-| **Boot Animation** | Toggle Predator boot animation & sound |
-| **LCD Override** | Reduce display latency and minimize ghosting |
-| **USB Charging** | Power USB ports while laptop is off (configurable threshold: 10%/20%/30%) |
+| **Thermal Profile** | Switch between `Quiet`, `Balanced`, `Performance`, and `Low-Power` modes. |
+| **Fan Speed** | Manual override — Auto / Low (30%) / Medium (50%) / High (70%) / Max (100%) for CPU & GPU. |
+| **Battery Limiter** | Cap charging at 80% for battery longevity. |
+| **Battery Calibration** | Trigger a battery calibration cycle (keep AC connected). |
+| **Backlight Timeout** | Auto-disable keyboard RGB after 30s of idle time. |
+| **Boot Animation** | Toggle the Acer Predator boot animation & sound. |
+| **LCD Override** | Reduce display latency and minimize ghosting. |
+| **USB Charging** | Power USB ports while the laptop is off (configurable threshold: 10% / 20% / 30%). |
 
-### Live Sensor Monitoring
-
-- **CPU Temperature** — read from `/sys/class/thermal/thermal_zone0/temp`
-- **GPU Temperature** — queried via `nvidia-smi`
-- **CPU & GPU Fan Speeds** — read from the `linuwu_sense` kernel module
-- Animated gauges and sparklines with cool, warning, and hot status colors
-
-### Keyboard RGB Panel (`F2`)
+### ⌨ Keyboard RGB Panel
 
 Full per-keyboard RGB configuration through USB HID protocol (VID: `04F2`, PID: `0117`):
 
 | Parameter | Options |
 |---|---|
-| **Effects** | Off, Static, Breathing, Wave, Snake, Ripple, Rainbow, Rain, Lightning, Spot, Stars, Fireball, Snow, Heartbeat |
-| **Colors** | Red, Orange, Gold, Emerald, Cyan, Blue, Violet, Magenta, Pink, White, Random |
-| **Brightness** | 0–100% (mapped to hardware range 0–50) |
-| **Speed** | 0–100% (mapped to hardware range 1–9, inverted) |
+| **Mode** | Off, Static, Breathing, Wave, Snake, Ripple, Rainbow, Rain, Lightning, Spot, Stars, Fireball, Snow, Heartbeat |
+| **Color** | Red, Orange, Gold, Emerald, Cyan, Blue, Violet, Magenta, Pink, White, Random |
+| **Brightness** | 0–100% |
+| **Speed** | 0–100% |
 | **Direction** | Right, Left, Up, Down, Clockwise, Counter-CW (Wave effect only) |
 
-### Config Persistence
+*RGB settings are automatically saved to `/var/lib/arch-sense/config.json` on successful apply and are restored on startup.*
 
-RGB settings are automatically saved to `/var/lib/arch-sense/config.json` on successful apply and are restored on startup. This single system-wide location is shared by the interactive TUI and the systemd boot service.
+### 📊 Live Sensor Monitoring
 
-### Systemd Integration
-
-A bundled `arch-sense.service` applies saved RGB settings at boot via the `--apply` headless flag — no TUI required.
+- **CPU Temperature** — read directly from `/sys/class/thermal/thermal_zone0/temp`.
+- **GPU Temperature** — queried via `nvidia-smi` (requires proprietary NVIDIA drivers).
+- **CPU & GPU Fan Speeds** — read from the `linuwu_sense` kernel module.
+- Features animated charts with cool, warning, and hot status colors.
 
 ---
 
@@ -75,7 +69,7 @@ A bundled `arch-sense.service` applies saved RGB settings at boot via the `--app
 
 ### 1. Install the `linuwu_sense` Kernel Module
 
-Arch-Sense depends on the `linuwu_sense` kernel module to expose Acer Predator hardware controls through sysfs. This must be installed first.
+Arch-Sense **strictly depends** on the `linuwu_sense` kernel module to expose Acer Predator hardware controls through sysfs.
 
 **Install `linux-headers` for your running kernel:**
 
@@ -83,7 +77,7 @@ Arch-Sense depends on the `linuwu_sense` kernel module to expose Acer Predator h
 sudo pacman -S linux-headers
 ```
 
-**Build and install the kernel module:**
+**Build and install the kernel module via DKMS:**
 
 ```bash
 git clone https://github.com/0x7375646F/Linuwu-Sense.git
@@ -91,21 +85,7 @@ cd Linuwu-Sense
 make install
 ```
 
-> **Note:** `make install` compiles the module via DKMS and loads it. The module will persist across reboots.
-
-**To uninstall the kernel module:**
-
-```bash
-cd Linuwu-Sense
-make uninstall
-```
-
-**Verify the module is loaded:**
-
-```bash
-lsmod | grep linuwu_sense
-ls /sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense/
-```
+> **Note:** `make install` compiles the module and loads it. The module will persist across reboots via DKMS. Ensure you see the `linuwu_sense` directory under `/sys/module/` after installation.
 
 ### 2. Install `libusb`
 
@@ -115,17 +95,11 @@ Required for USB HID communication with the keyboard:
 sudo pacman -S libusb
 ```
 
-### 3. NVIDIA GPU (Optional)
-
-GPU temperature monitoring requires `nvidia-smi`. If you have an NVIDIA GPU with the proprietary driver installed, this works out of the box. If not, GPU temperature will display as `N/A`.
-
 ---
 
-## Installation
+## Installation (AUR)
 
-### Option 1 — Install via AUR Helper (`paru` / `yay`)
-
-Install using your preferred AUR helper:
+The recommended way to install Arch-Sense is via the Arch User Repository (AUR).
 
 ```bash
 paru -S arch-sense
@@ -133,47 +107,30 @@ paru -S arch-sense
 yay -S arch-sense
 ```
 
-The package manager handles service integration automatically, so no manual RGB boot setup is required for this method.
+### Post-Installation Setup (Crucial)
 
-### Option 2 — Build from Source (Git Clone)
-
-```bash
-git clone https://github.com/cptdawn/Arch-Sense.git
-cd Arch-Sense
-cargo build --release
-sudo install -Dm755 target/release/arch-sense /usr/bin/arch-sense
-```
-
-### One-Time Rootless Permission Setup
-
-Arch-Sense can run as a normal user after a one-time hardware permission setup:
+Arch-Sense is designed to run as a **normal user** without `sudo`. To enable this, you must run the permission setup command once after installation:
 
 ```bash
 arch-sense --install-permissions
 ```
 
-This installs:
+This command uses `pkexec` (Polkit) to:
+1. Create an `arch-sense` system group.
+2. Install a `udev` rule for the Acer keyboard USB device (`04f2:0117`).
+3. Set up a systemd service (`arch-sense-permissions.service`) to re-apply sysfs permissions automatically on boot.
+4. Add your current user to the `arch-sense` group.
 
-- a udev rule for the Acer keyboard USB device (`04f2:0117`)
-- an `arch-sense` system group for sysfs control files and `/var/lib/arch-sense`
-- a small `arch-sense-permissions.service` that reapplies sysfs permissions after boot/module reload
+**Important:** After running the command, you **must log out and log back in** (or reboot) for the group changes to take effect.
 
-The command uses `pkexec` when launched as a normal user. If your system has no polkit agent, run:
+### Headless Boot Persistence (Systemd)
 
+When installed via the AUR, the `arch-sense.service` is automatically installed. This service runs `arch-sense --apply` headlessly on boot, reading `/var/lib/arch-sense/config.json` and applying your last saved RGB configuration before you even reach the login screen.
+
+If you ever need to manually enable it:
 ```bash
-sudo arch-sense --install-permissions
+sudo systemctl enable --now arch-sense.service
 ```
-
-If the command adds your user to the `arch-sense` group, log out and back in once. After that, launch with plain `arch-sense`.
-
-#### Option 2.1  —Enable RGB on Boot (Systemd) 
-
-```bash
-sudo cp arch-sense.service /etc/systemd/system/
-sudo systemctl enable --now arch-sense
-```
-
-This runs `arch-sense --apply` at boot, which reads the saved config and applies RGB settings headlessly.
 
 ---
 
@@ -181,159 +138,52 @@ This runs `arch-sense --apply` at boot, which reads the saved config and applies
 
 ### Launch the TUI
 
+Simply open your terminal and run:
+
 ```bash
 arch-sense
 ```
 
-If the status bar shows `KB LOCKED` or permission errors, run `arch-sense --doctor` and then `arch-sense --install-permissions`.
+### Navigation
 
-### Apply Saved RGB Settings (Headless)
+The TUI utilizes a fully keyboard-driven, context-sensitive footer.
 
-```bash
-arch-sense --apply
-```
+- `⇥ Tab` / `Shift+Tab` — Switch focus between the panels (Controls, Keyboard, Sensors).
+- `↑↓` — Navigate lists or select fields.
+- `←→` — Adjust values or choose options.
+- `↵ Enter` — Apply changes or toggle states.
+- `R` — Refresh sensor data (when focused on Sensors).
+- `Q` — Quit the application.
 
-Reads `/var/lib/arch-sense/config.json` and applies the RGB configuration without launching the TUI. This is what the systemd service uses.
+### Diagnostics & Troubleshooting
 
-### Permission Diagnostics
+To check hardware permissions and system status without launching the UI:
 
 ```bash
 arch-sense --doctor
 ```
 
-Reports USB, sysfs, and group setup status.
-
-### Help
-
-```bash
-arch-sense --help
-```
-
 ---
 
-## Keybindings
+## Expected Errors & Solutions
 
-### Global
+Arch-Sense features a robust status footer (●) that will alert you to hardware and permission issues.
 
-| Key | Action |
+| Error Message | Cause & Solution |
 |---|---|
-| `F1` | Focus Controls |
-| `F2` | Focus Keyboard RGB |
-| `F3` | Focus Sensors |
-| `Tab` / `Shift+Tab` | Cycle focus across the single-screen panels |
-| `r` | Refresh hardware snapshot |
-| `q` / `Ctrl+C` | Quit |
-
-### Controls Panel
-
-| Key | Action |
-|---|---|
-| `↑` / `k` | Navigate up |
-| `↓` / `j` | Navigate down |
-| `←` / `h` | Cycle option left |
-| `→` / `l` | Cycle option right |
-| `Enter` / `Space` | Confirm / Toggle |
-| `Esc` | Cancel pending change |
-
-### Keyboard RGB Panel
-
-| Key | Action |
-|---|---|
-| `↑` / `k` | Previous parameter |
-| `↓` / `j` | Next parameter |
-| `←` / `h` | Decrease / previous value |
-| `→` / `l` | Increase / next value |
-| `Enter` / `Space` | Apply to keyboard (auto-saves config) |
-
-### Sensors Panel
-
-| Key | Action |
-|---|---|
-| `Enter` / `Space` | Refresh sensors |
-
----
-
-## Architecture
-
-```
-arch-sense
-├── src/lib.rs           # Library-first crate entry (public runtime API)
-├── src/main.rs          # Thin binary shim (CLI args -> lib)
-├── src/app.rs           # App state machine and event loop
-├── src/ui.rs            # Ratatui rendering layer
-├── src/models.rs        # Typed UI, control, sensor, and RGB models
-├── src/hardware.rs      # Worker thread, sysfs, sensors, and USB RGB I/O
-├── src/config.rs        # Persistent config model and storage
-├── src/constants.rs     # Hardware paths/protocol constants
-├── src/theme.rs         # Shared UI palette
-├── Cargo.toml           # Rust 2021 edition, release-optimized (LTO + strip)
-├── arch-sense.service   # systemd oneshot unit for boot RGB
-└── LICENSE              # MIT
-```
-
-### Crate Dependencies
-
-| Crate | Purpose |
-|---|---|
-| `ratatui` | Terminal UI framework |
-| `crossterm` | Cross-platform terminal backend |
-| `rusb` | Safe Rust bindings to `libusb` for USB HID communication |
-| `anyhow` | Ergonomic error handling |
-| `serde` + `serde_json` | Config serialization/deserialization |
-
-### Hardware Communication
-
-**sysfs (Kernel Module):**
-```
-/sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi/predator_sense/
-├── fan_speed            # Read/write CPU,GPU fan percentages
-├── backlight_timeout    # Keyboard backlight auto-off
-├── battery_calibration  # Battery calibration trigger
-├── battery_limiter      # 80% charge cap
-├── boot_animation_sound # Boot animation toggle
-├── lcd_override         # LCD latency reduction
-└── usb_charging         # Powered-off USB charging threshold
-
-/sys/firmware/acpi/platform_profile          # Thermal profile read/write
-/sys/firmware/acpi/platform_profile_choices  # Available thermal profiles
-```
-
-**USB HID Protocol (Keyboard RGB):**
-```
-Device:    Acer Predator PH16-71 (VID: 0x04F2, PID: 0x0117)
-Interface: 3
-Endpoint:  0x04
-Transfer:  Control (bmRequestType 0x21, bRequest 0x09 SET_REPORT)
-
-Packet structure:
-  Preamble:  B1 00 00 00 00 00 00 4E
-  Color:     14 00 00 RR GG BB 00 00
-  Effect:    08 02 OP SPEED BRIGHT COLOR_PRESET DIR 9B
-```
-
----
-
-## Troubleshooting
-
-| Issue | Solution |
-|---|---|
-| `⚠ linuwu_sense module not loaded` | Install the kernel module (see [Prerequisites](#1-install-the-linuwu_sense-kernel-module)) |
-| `Keyboard not found (VID:04F2 PID:0117)` | Ensure the keyboard is the Acer Predator PH16-71 |
-| `KB LOCKED` / USB permission denied | Run `arch-sense --install-permissions`, then log out and back in if prompted |
-| `Failed to detach kernel driver` | Another process may be holding the USB interface — close any other RGB software |
-| GPU temperature shows `N/A` | Install NVIDIA proprietary drivers or `nvidia-smi` is not available |
-| Settings show `N/A` | The kernel module is loaded but sysfs nodes aren't populated — check `dmesg` for errors |
-| Permission denied on sysfs write | Run `arch-sense --doctor`, then `arch-sense --install-permissions` |
+| `● Kernel Module Missing` | The `linuwu_sense` module is not loaded into the kernel. Ensure you have installed it following the [Prerequisites](#1-install-the-linuwu_sense-kernel-module) section. If you recently updated your kernel, you may need to ensure your DKMS modules rebuilt successfully. |
+| `● USB Permission Denied` | Your user does not have permission to access the raw USB device. Ensure you have run `arch-sense --install-permissions` and **logged out and back in** to apply the new `arch-sense` group. |
+| `● Keyboard Not Found` | Arch-Sense could not find a USB device matching the Acer Predator PH16-71 Vendor/Product IDs (`VID:04F2 PID:0117`). Ensure your specific laptop model is supported. |
+| GPU Temp shows `N/A` | `nvidia-smi` is not installed or the proprietary NVIDIA drivers are not active. If using an integrated GPU, this is expected behavior. |
 
 ---
 
 ## Acknowledgments
 
-This project would not exist without the foundational work of these two projects:
+This project relies entirely on the foundational reverse-engineering work of the Linux hardware community:
 
-- **[Linuwu-Sense](https://github.com/0x7375646F/Linuwu-Sense)** by [@0x7375646F](https://github.com/0x7375646F) — The kernel module that exposes Acer Predator hardware controls via sysfs. Arch-Sense depends entirely on this module for system-level hardware management. Massive thanks for reverse-engineering the Acer WMI interface and making it available to the Linux community.
-
-- **[ph16-71-rgb](https://github.com/Order52/ph16-71-rgb)** by [@Order52](https://github.com/Order52) — The original Python implementation of the USB HID RGB protocol for the Acer Predator PH16-71 keyboard. The RGB control logic in Arch-Sense is a direct Rust port of this project's protocol reverse-engineering work. Huge thanks for documenting the packet structure and making keyboard RGB control possible on Linux.
+- **[Linuwu-Sense](https://github.com/0x7375646F/Linuwu-Sense)** by [@0x7375646F](https://github.com/0x7375646F) — The kernel module that exposes Acer Predator hardware controls via sysfs. Massive thanks for reverse-engineering the Acer WMI interface.
+- **[ph16-71-rgb](https://github.com/Order52/ph16-71-rgb)** by [@Order52](https://github.com/Order52) — The original Python implementation of the USB HID RGB protocol for the Acer Predator PH16-71 keyboard. Huge thanks for documenting the packet structure.
 
 ---
 
