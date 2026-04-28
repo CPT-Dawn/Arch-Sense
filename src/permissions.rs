@@ -324,20 +324,28 @@ pub fn apply_permissions_as_root() -> Result<()> {
 }
 
 fn reexec_install_permissions() -> Result<()> {
-    let exe = env::current_exe().context("resolving current executable for pkexec")?;
-    let status = Command::new("pkexec")
+    let exe = env::current_exe().context("resolving current executable for elevation")?;
+
+    // Try pkexec first for a GUI-friendly experience
+    match Command::new("pkexec")
         .arg(&exe)
         .arg(ROOT_INSTALL_FLAG)
         .status()
-        .with_context(|| {
-            format!(
-                "starting pkexec; install polkit or run `sudo {} --install-permissions`",
-                exe.display()
-            )
-        })?;
+    {
+        Ok(status) if status.success() => return Ok(()),
+        _ => {
+            // If pkexec fails (cancelled or not found), try sudo for terminal robustness
+            eprintln!("arch-sense: pkexec failed or cancelled; falling back to sudo...");
+            let status = Command::new("sudo")
+                .arg(&exe)
+                .arg(ROOT_INSTALL_FLAG)
+                .status()
+                .context("failed to execute sudo")?;
 
-    if !status.success() {
-        bail!("pkexec failed with status {status}; run `sudo arch-sense --install-permissions`");
+            if !status.success() {
+                bail!("elevation failed via both pkexec and sudo; manually run `sudo arch-sense --install-permissions`")
+            }
+        }
     }
 
     Ok(())
