@@ -33,27 +33,20 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
     };
     frame.render_widget(Block::new().style(base_style), area);
 
-    // Standardized vertical layout: Balanced Header (3), Flexible Body (Min 0), Balanced Footer (3)
+    // Standardized vertical layout: Header (5), Body (Min 0), Footer (5)
+    // We reduce the vertical margin to 0 to let the lines hit the edges if desired, 
+    // but keep horizontal margin for breathing room.
     let [header_area, body_area, footer_area] = Layout::vertical([
-        Constraint::Length(3),
+        Constraint::Length(4),
         Constraint::Min(0),
         Constraint::Length(3),
     ])
-    .margin(SPACING)
+    .horizontal_margin(SPACING)
     .areas(area);
 
-    // Unified 90% width for header and footer to feel "floating" but solid
-    let [header_floating] = Layout::horizontal([Constraint::Percentage(90)])
-        .flex(ratatui::layout::Flex::Center)
-        .areas(header_area);
-
-    let [footer_floating] = Layout::horizontal([Constraint::Percentage(90)])
-        .flex(ratatui::layout::Flex::Center)
-        .areas(footer_area);
-
-    draw_header(frame, header_floating);
+    draw_header(frame, header_area);
     draw_body(frame, body_area, app);
-    draw_footer(frame, footer_floating, app);
+    draw_footer(frame, footer_area, app);
 }
 
 fn draw_body(frame: &mut Frame, area: Rect, app: &App) {
@@ -166,11 +159,11 @@ fn blend(a: Color, b: Color, mix: f64) -> Color {
 }
 
 fn draw_header(f: &mut Frame, area: Rect) {
-    let block = Block::bordered()
-        .border_set(DOUBLE_SQUIRCLE_BORDER)
+    let block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_set(symbols::border::DOUBLE)
         .border_style(Style::new().fg(Theme::BORDER_FRAME));
 
-    let inner = block.inner(area);
     f.render_widget(block, area);
 
     let title = Line::from(vec![
@@ -179,7 +172,7 @@ fn draw_header(f: &mut Frame, area: Rect) {
             "A R C H - S E N S E",
             Style::new().fg(Theme::BRAND_PRIMARY).bold(),
         ),
-        Span::styled(" ◆ ", Style::new().fg(Theme::BRAND_SECONDARY)),
+        Span::styled(" ◆ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
         Span::styled(
             "Acer Predator Control Center",
             Style::new().fg(Theme::TEXT_SECONDARY),
@@ -187,7 +180,9 @@ fn draw_header(f: &mut Frame, area: Rect) {
     ])
     .centered();
 
-    f.render_widget(Paragraph::new(title), inner);
+    // Vertically center text in the 5-row area (row 2 is middle)
+    let title_area = Rect::new(area.x, area.y + 1, area.width, 1);
+    f.render_widget(Paragraph::new(title), title_area);
 }
 
 fn keyboard_title_status(access: &UsbAccess) -> (&'static str, Color) {
@@ -612,17 +607,11 @@ fn visible_history(history: &VecDeque<u64>, width: usize) -> Vec<u64> {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
-    let mut block = Block::bordered()
-        .border_set(DOUBLE_SQUIRCLE_BORDER)
+    let block = Block::default()
+        .borders(Borders::TOP)
+        .border_set(symbols::border::DOUBLE)
         .border_style(Style::new().fg(Theme::BORDER_FRAME));
 
-    // Apply optional background
-    block = match Theme::SURFACE {
-        Some(bg) => block.style(Style::new().bg(bg)),
-        None => block,
-    };
-
-    let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let mut context_spans = vec![
@@ -661,9 +650,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         context_spans.push(Span::styled(")", Style::new().fg(Theme::TEXT_DISABLED)));
     }
 
+    // Render content on row 2 (middle of the 5-row footer area)
+    let content_area = Rect::new(area.x, area.y + 2, area.width, 1);
     frame.render_widget(
         Paragraph::new(Line::from(context_spans)).centered(),
-        inner,
+        content_area,
     );
 }
 
