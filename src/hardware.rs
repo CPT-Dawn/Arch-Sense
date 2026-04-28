@@ -696,7 +696,7 @@ fn display_control_value(id: ControlId, raw: &str) -> String {
             other => other.to_string(),
         },
         ControlId::BatteryLimiter => match raw {
-            "1" => "Enabled".to_string(),
+            "1" => "80% Limit".to_string(),
             "0" => "Disabled".to_string(),
             other => other.to_string(),
         },

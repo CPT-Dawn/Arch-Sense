@@ -54,7 +54,7 @@ impl ControlId {
             Self::ThermalProfile => "Thermal Profile",
             Self::BacklightTimeout => "Backlight Timeout",
             Self::BatteryCalibration => "Battery Calibration",
-            Self::BatteryLimiter => "Battery Limiter",
+            Self::BatteryLimiter => "Battery Limit",
             Self::BootAnimation => "Boot Animation",
             Self::FanSpeed => "Fan Speed",
             Self::LcdOverride => "LCD Override",
