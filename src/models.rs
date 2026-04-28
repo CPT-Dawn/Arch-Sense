@@ -61,19 +61,6 @@ impl ControlId {
             Self::UsbCharging => "USB Charging",
         }
     }
-
-    pub(crate) fn description(self) -> &'static str {
-        match self {
-            Self::ThermalProfile => "Balances noise, temperature, and performance limits.",
-            Self::BacklightTimeout => "Turns keyboard lighting off after idle time.",
-            Self::BatteryCalibration => "Starts or stops the battery calibration cycle.",
-            Self::BatteryLimiter => "Caps charging near 80 percent for battery longevity.",
-            Self::BootAnimation => "Toggles Predator boot animation and sound.",
-            Self::FanSpeed => "Sets CPU/GPU fan override or returns fans to automatic control.",
-            Self::LcdOverride => "Reduces LCD latency and display ghosting.",
-            Self::UsbCharging => "Powers USB ports while the laptop is off down to a threshold.",
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -110,10 +97,6 @@ pub(crate) struct ControlItem {
 impl ControlItem {
     pub(crate) fn label(&self) -> &'static str {
         self.id.label()
-    }
-
-    pub(crate) fn description(&self) -> &'static str {
-        self.id.description()
     }
 
     pub(crate) fn pending_choice(&self) -> Option<&ControlChoice> {

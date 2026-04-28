@@ -552,10 +552,6 @@ impl App {
         self.controls.get(self.selected_control)
     }
 
-    pub(crate) fn selected_rgb_field(&self) -> RgbField {
-        RgbField::ALL[self.selected_rgb_field]
-    }
-
     pub(crate) fn context_hint(&self) -> Vec<(&'static str, String)> {
         match self.focus {
             FocusPanel::Controls => self.controls_context(),
@@ -571,7 +567,7 @@ impl App {
             return vec![("R", "Refresh".to_string()), ("Q", "Quit".to_string())];
         };
 
-        if let Some(choice) = item.pending_choice() {
+        if let Some(_choice) = item.pending_choice() {
             return vec![
                 ("Enter", "Apply".to_string()),
                 ("Esc", "Cancel".to_string()),

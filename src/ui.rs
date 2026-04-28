@@ -33,20 +33,21 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
     };
     frame.render_widget(Block::new().style(base_style), area);
 
+    // Standardized vertical layout: Balanced Header (3), Flexible Body (Min 0), Balanced Footer (3)
     let [header_area, body_area, footer_area] = Layout::vertical([
-        Constraint::Length(3), // Slimmer header
+        Constraint::Length(3),
         Constraint::Min(0),
-        Constraint::Length(4), // Slimmer footer
+        Constraint::Length(3),
     ])
     .margin(SPACING)
     .areas(area);
 
-    // Center the header and footer blocks horizontally for a "floating" look
-    let [header_floating] = Layout::horizontal([Constraint::Percentage(70)])
+    // Unified 90% width for header and footer to feel "floating" but solid
+    let [header_floating] = Layout::horizontal([Constraint::Percentage(90)])
         .flex(ratatui::layout::Flex::Center)
         .areas(header_area);
 
-    let [footer_floating] = Layout::horizontal([Constraint::Percentage(80)])
+    let [footer_floating] = Layout::horizontal([Constraint::Percentage(90)])
         .flex(ratatui::layout::Flex::Center)
         .areas(footer_area);
 
@@ -56,16 +57,18 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
 }
 
 fn draw_body(frame: &mut Frame, area: Rect, app: &App) {
+    // 50/50 split for better visual balance on modern screens
     let [left, right] = Layout::horizontal([
-        Constraint::Percentage(45),
-        Constraint::Percentage(55),
+        Constraint::Percentage(50),
+        Constraint::Percentage(50),
     ])
     .spacing(SPACING)
     .areas(area);
 
+    // Even split for controls and keyboard
     let [controls, rgb] = Layout::vertical([
-        Constraint::Percentage(55),
-        Constraint::Percentage(45),
+        Constraint::Percentage(50),
+        Constraint::Percentage(50),
     ])
     .spacing(SPACING)
     .areas(left);
@@ -622,9 +625,6 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let [context, message] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
-        .areas(inner);
-
     let mut context_spans = vec![
         Span::styled(" [Tab] ", Style::new().bg(Theme::CHIP_BG).fg(Theme::CHIP_FG).bold()),
         Span::styled(" Switch Panel ", Style::new().fg(Theme::TEXT_SECONDARY)),
@@ -644,50 +644,27 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         context_spans.push(Span::raw("  "));
     }
 
-    frame.render_widget(
-        Paragraph::new(Line::from(context_spans)).centered(),
-        context,
-    );
-
-    let mut message_spans = vec![
-        {
-            let level_style = style_with_bg(
-                Style::new()
-                    .fg(Theme::TEXT_ON_STATUS)
-                    .bg(message_color(app.message.level))
-                    .bold(),
-                None,
-            );
-            Span::styled(
-                format!(" {} ", message_level(app.message.level)),
-                level_style,
-            )
-        },
-        Span::raw(" "),
-        Span::styled(
-            &app.message.text,
-            Style::new().fg(message_color(app.message.level)),
-        ),
-    ];
+    // Status message with simple colored indicator instead of a heavy chip
+    context_spans.push(Span::styled("  |  ", Style::new().fg(Theme::BORDER_IDLE)));
+    context_spans.push(Span::styled(" ● ", Style::new().fg(message_color(app.message.level))));
+    context_spans.push(Span::styled(
+        &app.message.text,
+        Style::new().fg(Theme::TEXT_SECONDARY),
+    ));
 
     if let Some(note) = &app.hardware_note {
-        message_spans.push(Span::styled("  |  ", Style::new().fg(Theme::TEXT_DISABLED)));
-        message_spans.push(Span::styled(
+        context_spans.push(Span::styled("  (", Style::new().fg(Theme::TEXT_DISABLED)));
+        context_spans.push(Span::styled(
             note,
-            Style::new().fg(Theme::TEXT_SECONDARY),
+            Style::new().fg(Theme::TEXT_DISABLED),
         ));
+        context_spans.push(Span::styled(")", Style::new().fg(Theme::TEXT_DISABLED)));
     }
 
-    frame.render_widget(Paragraph::new(Line::from(message_spans)).centered(), message);
-}
-
-fn message_level(level: MessageLevel) -> &'static str {
-    match level {
-        MessageLevel::Info => "INFO",
-        MessageLevel::Success => "OK",
-        MessageLevel::Warning => "WARN",
-        MessageLevel::Error => "ERR",
-    }
+    frame.render_widget(
+        Paragraph::new(Line::from(context_spans)).centered(),
+        inner,
+    );
 }
 
 fn message_color(level: MessageLevel) -> Color {

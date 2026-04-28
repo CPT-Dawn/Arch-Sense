@@ -59,8 +59,6 @@ impl Theme {
     pub(crate) const STATE_SUCCESS: Color = Color::Rgb(128, 214, 145);
     pub(crate) const STATE_WARNING: Color = Color::Rgb(243, 189, 101);
     pub(crate) const STATE_ERROR: Color = Color::Rgb(240, 111, 132);
-    /// Foreground text rendered on status chips.
-    pub(crate) const TEXT_ON_STATUS: Color = Color::Rgb(14, 20, 31);
 
     // -------------------------------------------------------------------------
     // Sensor Specific Colors
