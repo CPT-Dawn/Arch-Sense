@@ -79,6 +79,11 @@ impl Demo {
             .acer_sensors(r.cpu_celsius, r.gpu_celsius, r.cpu_fan_rpm, r.gpu_fan_rpm)
             .battery(r.battery_percent, "Discharging", r.battery_microwatts)
             .usb_hid_keyboard()
+            // A healthy install, so the Doctor examines this laptop and not the host.
+            .gcc_kernel()
+            .dkms_built()
+            .secure_boot(false)
+            .login(&["dawn"], &[1000, 966])
             .build()?;
 
         let backend = LightingBackend::UsbHid;

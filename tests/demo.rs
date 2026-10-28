@@ -98,3 +98,14 @@ fn everything_stays_under_the_root_and_dies_with_the_demo() {
     drop(demo);
     assert!(!root.exists());
 }
+
+#[test]
+fn the_demo_doctor_finds_a_healthy_laptop_not_the_host() {
+    use arch_sense::doctor::{self, Membership};
+
+    let demo = Demo::start().expect("demo");
+    let machine = demo.machine();
+    let report = doctor::diagnose(&machine, Membership::current(&machine));
+
+    assert!(!report.has_errors(), "{report}");
+}
