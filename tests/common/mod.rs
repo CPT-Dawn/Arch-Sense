@@ -157,6 +157,19 @@ impl Harness {
         text
     }
 
+    /// Renders the screen as text without ticking first, so nothing the
+    /// hardware worker has finished since the last tick shows yet.
+    pub fn screen_untouched(&mut self) -> String {
+        let app = &self.app;
+        self.terminal
+            .draw(|frame| app.render(frame))
+            .expect("render frame");
+        let buffer = self.terminal.backend().buffer().clone();
+        (0..buffer.area.height)
+            .map(|y| row_text(&buffer, y, 0, buffer.area.width) + "\n")
+            .collect()
+    }
+
     /// The first screen line containing `needle`, if any.
     pub fn line_with(&mut self, needle: &str) -> Option<String> {
         self.screen()

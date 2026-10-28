@@ -269,6 +269,32 @@ fn backspace_edits_the_hex_input() {
 }
 
 #[test]
+fn saved_lighting_is_read_by_the_worker_and_a_corrupt_one_is_reported() {
+    let fake = FakeMachine::builder()
+        .predator_sense()
+        .usb_hid_keyboard()
+        .build()
+        .expect("fake machine");
+    std::fs::create_dir_all(fake.machine().state_dir()).unwrap();
+    std::fs::write(saved::path(&fake.machine()), "{ not json").unwrap();
+
+    let mut app = Harness::start(&fake, RecordingTransport::default());
+    let first = app.screen_untouched();
+    assert!(
+        !first.contains("Saved Lighting ignored"),
+        "the UI thread read the file itself:\n{first}"
+    );
+
+    app.wait_until("the warning", |app| {
+        app.screen().contains("✗ Saved Lighting ignored")
+    });
+    app.wait_until("the Lighting section", |app| {
+        app.setting_labels().contains(&"Effect".to_string())
+    });
+    assert_eq!(app.highlighted("Effect").as_deref(), Some("Static"));
+}
+
+#[test]
 fn escape_cancels_the_hex_input_without_writing() {
     let mut lit = start(None);
     select(&mut lit.app, "Colour");

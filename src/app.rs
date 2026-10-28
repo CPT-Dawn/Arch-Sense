@@ -3,7 +3,8 @@
 //! Every change applies live: a key press turns into a [`Change`], which is shown
 //! straight away and sent to the hardware worker. The worker's answer either
 //! confirms it in the footer or rolls it back with an inline error. The UI thread
-//! never touches sysfs or USB itself.
+//! never touches sysfs, USB or disk itself: loading the Saved Lighting and running
+//! the Doctor are worker jobs too.
 //!
 //! Lighting is the one exception to "at once": it shows at once, but reaches the
 //! keyboard only after input settles for [`LIGHTING_DEBOUNCE`], so holding an
@@ -24,10 +25,10 @@ use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 
 use crate::capabilities::{Capability, SenseInterface};
-use crate::doctor::{self, Membership, Report};
+use crate::doctor::Report;
 use crate::hardware::{HardwareEvent, HardwareHandle, HardwareRequest, spawn_worker};
 use crate::keyboard::{KeyboardTransport, UsbAccess};
-use crate::lighting::{Detection, Lighting, Rgb, saved};
+use crate::lighting::{Detection, Lighting, Rgb};
 use crate::machine::MachineRoot;
 use crate::models::{Battery, FanMode, SensorSnapshot};
 use crate::settings::{Change, LightingField, Section, Setting, SettingId, SettingsModel};
@@ -66,8 +67,9 @@ pub(crate) enum Overlay {
     ConfirmCalibration,
     /// Typing a custom colour: the hex digits so far (uppercase, at most six).
     Hex(String),
-    /// The Doctor's checklist, scrolled down `scroll` lines.
-    Doctor { report: Report, scroll: u16 },
+    /// The Doctor's checklist, scrolled down `scroll` lines; `None` while the
+    /// worker is still running the checks.
+    Doctor { report: Option<Report>, scroll: u16 },
     /// Every key and mouse binding.
     Help,
 }
@@ -152,8 +154,6 @@ pub struct App {
     /// Time the app has been told has passed; the one clock everything here runs on.
     pub(crate) clock: Duration,
     hardware: HardwareHandle,
-    /// The machine, for the Doctor (hardware I/O itself stays on the worker).
-    machine: MachineRoot,
     snapshot_pending: bool,
     /// When the last sensor poll was sent, on the app clock; `None` before the first.
     last_snapshot_request: Option<Duration>,
@@ -164,15 +164,11 @@ impl App {
     /// Starts the app on `machine`, with keyboard lighting going through `keyboard`.
     /// Hardware I/O runs on a background worker; [`tick`](Self::tick) collects its results.
     pub fn new(machine: MachineRoot, keyboard: impl KeyboardTransport + 'static) -> Result<Self> {
-        let (saved_lighting, saved_warning) = match saved::load(&machine) {
-            Ok(lighting) => (lighting, None),
-            Err(error) => (None, Some(format!("✗ Saved Lighting ignored: {error:#}"))),
-        };
-        let hardware = spawn_worker(machine.clone(), Box::new(keyboard))?;
+        let hardware = spawn_worker(machine, Box::new(keyboard))?;
 
         let mut app = Self {
             settings: SettingsModel::default(),
-            last_lighting: saved_lighting,
+            last_lighting: None,
             pending_lighting: None,
             clock: Duration::ZERO,
             selected: None,
@@ -189,13 +185,14 @@ impl App {
             in_flight: HashMap::new(),
             lighting_note: None,
             hardware,
-            machine,
             snapshot_pending: false,
             last_snapshot_request: None,
             quit: false,
         };
-        if let Some(warning) = saved_warning {
-            app.set_message(MessageLevel::Error, warning);
+        // Queued ahead of the first scan, so the Saved Lighting is in hand by
+        // the time the scan says which keyboard there is to show it on.
+        if let Err(error) = app.hardware.send(HardwareRequest::LoadSavedLighting) {
+            app.set_message(MessageLevel::Error, error.to_string());
         }
         app.request_snapshot();
         Ok(app)
@@ -359,6 +356,19 @@ impl App {
                         format!("✗ Lighting applied but not saved: {error}"),
                     );
                 }
+                HardwareEvent::SavedLighting(Ok(lighting)) => self.last_lighting = lighting,
+                HardwareEvent::SavedLighting(Err(error)) => {
+                    self.set_message(
+                        MessageLevel::Error,
+                        format!("✗ Saved Lighting ignored: {error}"),
+                    );
+                }
+                HardwareEvent::Diagnosis(report) => {
+                    // Dropped if the overlay was closed while the checks ran.
+                    if let Some(Overlay::Doctor { report: shown, .. }) = &mut self.overlay {
+                        *shown = Some(report);
+                    }
+                }
                 HardwareEvent::LightingFailed(error) => {
                     self.lighting_note = None;
                     self.set_message(
@@ -421,10 +431,17 @@ impl App {
         }
     }
 
-    /// Runs the Doctor now and shows its checklist.
+    /// Opens the Doctor's overlay and has the worker run its checks.
     fn open_doctor(&mut self) {
-        let report = doctor::diagnose(&self.machine, Membership::current(&self.machine));
-        self.overlay = Some(Overlay::Doctor { report, scroll: 0 });
+        match self.hardware.send(HardwareRequest::Diagnose) {
+            Ok(()) => {
+                self.overlay = Some(Overlay::Doctor {
+                    report: None,
+                    scroll: 0,
+                });
+            }
+            Err(error) => self.set_message(MessageLevel::Error, error.to_string()),
+        }
     }
 
     /// Reacts to one mouse event, hit-testing against the last frame's rectangles.
@@ -488,7 +505,8 @@ impl App {
             Overlay::Hex(digits) => self.on_hex_key(digits, key),
             Overlay::Doctor { report, scroll } => {
                 // A loose cap; the overlay clamps to what's actually left to show.
-                let limit = u16::try_from(report.checks().len() * 4).unwrap_or(u16::MAX);
+                let checks = report.as_ref().map_or(0, |report| report.checks().len());
+                let limit = u16::try_from(checks * 4).unwrap_or(u16::MAX);
                 let scroll = match key.code {
                     KeyCode::Char('q') | KeyCode::Char('d') => {
                         self.overlay = None;

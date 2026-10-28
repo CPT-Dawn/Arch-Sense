@@ -1,4 +1,5 @@
 //! The Doctor overlay: the same checklist `arch-sense doctor` prints, scrollable.
+//! The checks run on the hardware worker; until they are back it says so.
 
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
@@ -9,10 +10,13 @@ use crate::theme::Theme;
 
 const MAX_WIDTH: u16 = 104;
 
-pub(super) fn draw(frame: &mut Frame, area: Rect, report: &Report, scroll: u16) {
+pub(super) fn draw(frame: &mut Frame, area: Rect, report: Option<&Report>, scroll: u16) {
     // Borders and modal padding take 6 columns and 3 rows; the key hint takes a row.
     let width = area.width.saturating_sub(4).min(MAX_WIDTH);
-    let lines = lines(report, usize::from(width.saturating_sub(6)));
+    let lines = match report {
+        Some(report) => lines(report, usize::from(width.saturating_sub(6))),
+        None => vec![Line::styled("Running checks…", Style::new().fg(Theme::SUB))],
+    };
     let wanted = u16::try_from(lines.len())
         .unwrap_or(u16::MAX)
         .saturating_add(4);

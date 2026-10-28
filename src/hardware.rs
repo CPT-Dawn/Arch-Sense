@@ -10,6 +10,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::capabilities::{Capability, Laptop, detect};
 use crate::constants::setup_hint;
+use crate::doctor::{self, Membership, Report};
 use crate::keyboard::{KeyboardTransport, UsbAccess, keyboard_access};
 use crate::lighting::{self, Detection, Lighting, saved};
 use crate::machine::MachineRoot;
@@ -49,6 +50,10 @@ pub(crate) enum HardwareRequest {
     },
     /// Sends `lighting` to the keyboard and saves it as the Saved Lighting.
     ApplyLighting(Lighting),
+    /// Reads the Saved Lighting from disk.
+    LoadSavedLighting,
+    /// Runs the Doctor.
+    Diagnose,
     Shutdown,
 }
 
@@ -68,6 +73,10 @@ pub(crate) enum HardwareEvent {
     /// The keyboard took the lighting but saving it failed.
     LightingNotSaved(String),
     LightingFailed(String),
+    /// The Saved Lighting (`None` when nothing is saved), or why it couldn't be read.
+    SavedLighting(Result<Option<Lighting>, String>),
+    /// The Doctor's findings.
+    Diagnosis(Report),
 }
 
 #[derive(Clone, Debug)]
@@ -146,6 +155,12 @@ fn worker_loop(
             }
             HardwareRequest::ApplyLighting(lighting) => {
                 apply_lighting(m, &lighting, keyboard.as_mut())
+            }
+            HardwareRequest::LoadSavedLighting => {
+                HardwareEvent::SavedLighting(saved::load(m).map_err(|error| format!("{error:#}")))
+            }
+            HardwareRequest::Diagnose => {
+                HardwareEvent::Diagnosis(doctor::diagnose(m, Membership::current(m)))
             }
             HardwareRequest::Shutdown => break,
         };
