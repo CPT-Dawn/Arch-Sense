@@ -79,7 +79,10 @@ jobs:
                   chmod 600 ~/.ssh/aur
                   ssh-keygen -y -f ~/.ssh/aur >/dev/null || { echo "AUR_SSH_PRIVATE_KEY is not a valid private key." >&2; exit 1; }
                   ssh-keyscan -t ed25519,rsa aur.archlinux.org >>~/.ssh/known_hosts
-                  printf 'Host aur.archlinux.org\n  User aur\n  IdentityFile ~/.ssh/aur\n  IdentitiesOnly yes\n  StrictHostKeyChecking yes\n' >~/.ssh/config
+                  # In a container job $HOME is /github/home, but ssh reads ~ from the passwd
+                  # entry (/root), so it never sees these files unless told where they are.
+                  printf 'Host aur.archlinux.org\n  User aur\n  IdentityFile %s/.ssh/aur\n  IdentitiesOnly yes\n  UserKnownHostsFile %s/.ssh/known_hosts\n  StrictHostKeyChecking yes\n' "$HOME" "$HOME" >~/.ssh/config
+                  echo "GIT_SSH_COMMAND=ssh -F $HOME/.ssh/config" >>"$GITHUB_ENV"
 
             - name: Push to the AUR
               if: env.PUBLISH == 'true'
