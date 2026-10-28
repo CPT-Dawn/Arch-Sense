@@ -43,6 +43,8 @@ jobs:
                   pacman -Syu --noconfirm --needed git cargo namcap dkms libusb systemd
                   # makepkg refuses to run as root.
                   useradd -m builder
+                  # systemd-analyze verify wants to write here, even with --root.
+                  install -d -o builder -g builder /run/systemd
             - uses: actions/checkout@v4
               with:
                   fetch-depth: 0
