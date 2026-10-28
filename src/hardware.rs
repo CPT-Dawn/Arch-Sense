@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -7,14 +8,14 @@ use std::thread;
 
 use anyhow::{Context, Result, bail};
 
-use crate::capabilities::{Laptop, SenseInterface, detect};
+use crate::capabilities::{Capability, Laptop, detect};
+use crate::config::AppConfig;
 use crate::constants::setup_hint;
 use crate::constants::{BRIGHT_HW_MAX, PREAMBLE, SPEED_HW_FAST, SPEED_HW_SLOW};
 use crate::keyboard::{KeyboardTransport, Packet, UsbAccess, keyboard_access};
 use crate::machine::MachineRoot;
 use crate::models::{
-    ControlChoice, ControlId, ControlItem, ControlKind, FanMode, OFF_EFFECT_INDEX,
-    RANDOM_COLOR_INDEX, Rgb, RgbSettings, SensorMetric, SensorSnapshot,
+    FanMode, OFF_EFFECT_INDEX, RANDOM_COLOR_INDEX, Rgb, RgbSettings, SensorMetric, SensorSnapshot,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,33 +43,43 @@ struct HwmonTempSample {
 #[derive(Debug)]
 pub(crate) enum HardwareRequest {
     Snapshot,
-    ApplyControl { id: ControlId, value: String },
-    ApplyRgb(RgbSettings),
+    /// Writes `value` to the file behind `capability`.
+    Write {
+        capability: Capability,
+        value: String,
+    },
+    /// Sends `settings` to the keyboard and saves them as the Saved Lighting.
+    ApplyLighting(RgbSettings),
     Shutdown,
 }
 
 #[derive(Debug)]
 pub(crate) enum HardwareEvent {
     Snapshot(Box<HardwareSnapshot>),
-    ControlApplied {
-        id: ControlId,
-        controls: Vec<ControlItem>,
+    Written {
+        capability: Capability,
+        value: String,
     },
-    ControlFailed {
-        id: ControlId,
-        error: String,
+    WriteFailed {
+        capability: Capability,
+        /// A short, human reason such as "permission denied".
+        reason: String,
     },
-    RgbApplied(String),
-    RgbFailed(String),
+    LightingApplied,
+    /// The keyboard took the lighting but saving it failed.
+    LightingNotSaved(String),
+    LightingFailed(String),
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct HardwareSnapshot {
     pub(crate) laptop: Laptop,
+    /// The laptop's model name from DMI, when it reads.
+    pub(crate) model: Option<String>,
     pub(crate) keyboard: UsbAccess,
     pub(crate) sensors: SensorSnapshot,
-    pub(crate) controls: Vec<ControlItem>,
-    pub(crate) note: Option<String>,
+    /// The current raw value of every Capability present.
+    pub(crate) values: BTreeMap<Capability, String>,
 }
 
 pub(crate) struct HardwareHandle {
@@ -116,21 +127,14 @@ fn worker_loop(
     for request in rx {
         let event = match request {
             HardwareRequest::Snapshot => HardwareEvent::Snapshot(Box::new(collect_snapshot(m))),
-            HardwareRequest::ApplyControl { id, value } => match write_control(m, id, &value) {
-                Ok(()) => HardwareEvent::ControlApplied {
-                    id,
-                    controls: load_controls(m),
-                },
-                Err(error) => HardwareEvent::ControlFailed {
-                    id,
-                    error: error.to_string(),
-                },
-            },
-            HardwareRequest::ApplyRgb(settings) => {
-                match apply_rgb_settings(&settings, keyboard.as_mut()) {
-                    Ok(message) => HardwareEvent::RgbApplied(message),
-                    Err(error) => HardwareEvent::RgbFailed(error.to_string()),
+            HardwareRequest::Write { capability, value } => {
+                match write_capability(m, capability, &value) {
+                    Ok(()) => HardwareEvent::Written { capability, value },
+                    Err(reason) => HardwareEvent::WriteFailed { capability, reason },
                 }
+            }
+            HardwareRequest::ApplyLighting(settings) => {
+                apply_lighting(m, &settings, keyboard.as_mut())
             }
             HardwareRequest::Shutdown => break,
         };
@@ -141,38 +145,59 @@ fn worker_loop(
     }
 }
 
-pub(crate) fn collect_snapshot(m: &MachineRoot) -> HardwareSnapshot {
-    let laptop = detect(m);
-    let controls = controls_for(m, &laptop);
-    let sensors = read_sensors(m, &laptop);
-    let keyboard = keyboard_access(m);
-    let note = hardware_note(m, &laptop, &sensors);
-
-    HardwareSnapshot {
-        laptop,
-        keyboard,
-        sensors,
-        controls,
-        note,
+fn apply_lighting(
+    m: &MachineRoot,
+    settings: &RgbSettings,
+    keyboard: &mut dyn KeyboardTransport,
+) -> HardwareEvent {
+    if let Err(error) = apply_rgb_settings(settings, keyboard) {
+        return HardwareEvent::LightingFailed(error.to_string());
+    }
+    let config = AppConfig {
+        rgb: settings.to_config(),
+    };
+    match config.save(m) {
+        Ok(()) => HardwareEvent::LightingApplied,
+        Err(error) => HardwareEvent::LightingNotSaved(error.to_string()),
     }
 }
 
-fn hardware_note(m: &MachineRoot, laptop: &Laptop, sensors: &SensorSnapshot) -> Option<String> {
-    if laptop.sense_interface == SenseInterface::None {
-        return Some(format!(
-            "linuwu_sense module offline: no Sense Interface in {}",
-            m.linuwu_sense_dir().display()
-        ));
-    }
+pub(crate) fn collect_snapshot(m: &MachineRoot) -> HardwareSnapshot {
+    let laptop = detect(m);
+    let values = laptop
+        .capabilities()
+        .iter()
+        .filter_map(|&capability| {
+            let path = capability.path(m, laptop.sense_interface)?;
+            read_sysfs(&path).ok().map(|value| (capability, value))
+        })
+        .collect();
+    let sensors = read_sensors(m, &laptop);
+    let keyboard = keyboard_access(m);
+    let model = read_optional_string(&m.dmi_product_name());
 
-    [
-        &sensors.cpu_temp,
-        &sensors.gpu_temp,
-        &sensors.cpu_fan,
-        &sensors.gpu_fan,
-    ]
-    .iter()
-    .find_map(|metric| metric.error.clone())
+    HardwareSnapshot {
+        laptop,
+        model,
+        keyboard,
+        sensors,
+        values,
+    }
+}
+
+/// Writes `value` to `capability`'s file, re-detecting the laptop first so a
+/// Capability that vanished is refused rather than written somewhere stale.
+fn write_capability(m: &MachineRoot, capability: Capability, value: &str) -> Result<(), String> {
+    let laptop = detect(m);
+    let path = Some(&laptop)
+        .filter(|laptop| laptop.has(capability))
+        .and_then(|laptop| capability.path(m, laptop.sense_interface))
+        .ok_or_else(|| "not available on this laptop".to_string())?;
+    fs::write(path, value).map_err(|error| match error.kind() {
+        ErrorKind::PermissionDenied => "permission denied".to_string(),
+        ErrorKind::NotFound => "attribute not found".to_string(),
+        _ => error.to_string(),
+    })
 }
 
 fn read_sensors(m: &MachineRoot, laptop: &Laptop) -> SensorSnapshot {
@@ -613,146 +638,10 @@ fn list_hwmon_dirs(m: &MachineRoot) -> Result<Vec<PathBuf>> {
     Ok(dirs)
 }
 
-/// The controls for every Capability the laptop has, re-detecting it first.
-pub(crate) fn load_controls(m: &MachineRoot) -> Vec<ControlItem> {
-    controls_for(m, &detect(m))
-}
-
-fn controls_for(m: &MachineRoot, laptop: &Laptop) -> Vec<ControlItem> {
-    ControlId::ALL
-        .iter()
-        .copied()
-        .filter(|id| laptop.has(id.capability()))
-        .map(|id| read_control(m, laptop, id))
-        .collect()
-}
-
-fn read_control(m: &MachineRoot, laptop: &Laptop, id: ControlId) -> ControlItem {
-    let kind = control_kind(id, &laptop.thermal_profiles);
-    let raw_result = control_path(m, laptop.sense_interface, id)
-        .context("no Sense Interface")
-        .and_then(|path| read_sysfs(&path));
-    let (raw, last_error) = match raw_result {
-        Ok(raw) => (raw, None),
-        Err(error) => ("N/A".to_string(), Some(error.to_string())),
-    };
-
-    ControlItem {
-        id,
-        display: display_control_value(id, &raw),
-        raw,
-        kind,
-        pending: None,
-        last_error,
-    }
-}
-
-fn control_kind(id: ControlId, thermal_profiles: &[String]) -> ControlKind {
-    match id {
-        ControlId::ThermalProfile => ControlKind::Choice(
-            thermal_profiles
-                .iter()
-                .map(|choice| ControlChoice::new(choice, thermal_label(choice)))
-                .collect(),
-        ),
-        ControlId::FanSpeed => ControlKind::Choice(vec![
-            ControlChoice::new("0,0", "Auto"),
-            ControlChoice::new("100,100", "Max"),
-        ]),
-        ControlId::UsbCharging => ControlKind::Choice(vec![
-            ControlChoice::new("0", "Off"),
-            ControlChoice::new("10", "Until 10%"),
-            ControlChoice::new("20", "Until 20%"),
-            ControlChoice::new("30", "Until 30%"),
-        ]),
-        _ => ControlKind::Toggle,
-    }
-}
-
-/// The file a control reads from and writes to, if the laptop has a place for it.
-fn control_path(m: &MachineRoot, interface: SenseInterface, id: ControlId) -> Option<PathBuf> {
-    let attribute = match id {
-        ControlId::ThermalProfile => return Some(m.platform_profile()),
-        ControlId::BacklightTimeout => "backlight_timeout",
-        ControlId::BatteryCalibration => "battery_calibration",
-        ControlId::BatteryLimiter => "battery_limiter",
-        ControlId::BootAnimation => "boot_animation_sound",
-        ControlId::FanSpeed => "fan_speed",
-        ControlId::LcdOverride => "lcd_override",
-        ControlId::UsbCharging => "usb_charging",
-    };
-    interface.attribute(m, attribute)
-}
-
-fn write_control(m: &MachineRoot, id: ControlId, value: &str) -> Result<()> {
-    let laptop = detect(m);
-    let path = Some(&laptop)
-        .filter(|laptop| laptop.has(id.capability()))
-        .and_then(|laptop| control_path(m, laptop.sense_interface, id));
-    let Some(path) = path else {
-        bail!("{} is not available on this laptop", id.label());
-    };
-    write_sysfs(&path, value)
-}
-
-fn display_control_value(id: ControlId, raw: &str) -> String {
-    match id {
-        ControlId::ThermalProfile => thermal_label(raw).to_string(),
-        ControlId::BacklightTimeout | ControlId::BootAnimation | ControlId::LcdOverride => {
-            on_off(raw)
-        }
-        ControlId::BatteryCalibration => match raw {
-            "1" => "Running".to_string(),
-            "0" => "Stopped".to_string(),
-            other => other.to_string(),
-        },
-        ControlId::BatteryLimiter => match raw {
-            "1" => "80% Limit".to_string(),
-            "0" => "Disabled".to_string(),
-            other => other.to_string(),
-        },
-        ControlId::FanSpeed => match raw {
-            "0" | "0,0" => "Auto".to_string(),
-            "100" | "100,100" => "Max".to_string(),
-            other => format!("CPU/GPU {other}"),
-        },
-        ControlId::UsbCharging => match raw {
-            "0" => "Disabled".to_string(),
-            "10" => "Until 10%".to_string(),
-            "20" => "Until 20%".to_string(),
-            "30" => "Until 30%".to_string(),
-            other => other.to_string(),
-        },
-    }
-}
-
-fn thermal_label(raw: &str) -> &str {
-    match raw {
-        "quiet" => "Quiet",
-        "balanced" => "Balanced",
-        "balanced-performance" => "Balanced Performance",
-        "performance" => "Performance",
-        "low-power" => "Low Power",
-        other => other,
-    }
-}
-
-fn on_off(raw: &str) -> String {
-    match raw {
-        "1" => "Enabled".to_string(),
-        "0" => "Disabled".to_string(),
-        other => other.to_string(),
-    }
-}
-
 fn read_sysfs(path: &Path) -> Result<String> {
     fs::read_to_string(path)
         .map(|content| content.trim().to_string())
         .map_err(|error| sysfs_error(error, "reading", path, None))
-}
-
-fn write_sysfs(path: &Path, value: &str) -> Result<()> {
-    fs::write(path, value).map_err(|error| sysfs_error(error, "writing", path, Some(value)))
 }
 
 fn sysfs_error(
@@ -847,18 +736,5 @@ mod tests {
 
         assert_eq!(packet[3], SPEED_HW_SLOW);
         assert_eq!(packet[4], BRIGHT_HW_MAX);
-    }
-
-    #[test]
-    fn display_values_are_human_readable() {
-        assert_eq!(
-            display_control_value(ControlId::ThermalProfile, "balanced"),
-            "Balanced"
-        );
-        assert_eq!(display_control_value(ControlId::FanSpeed, "0,0"), "Auto");
-        assert_eq!(
-            display_control_value(ControlId::BatteryLimiter, "1"),
-            "80% Limit"
-        );
     }
 }

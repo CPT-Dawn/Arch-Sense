@@ -1,142 +1,4 @@
-use crate::capabilities::Capability;
 use crate::config::RgbConfig;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FocusPanel {
-    Controls,
-    Rgb,
-    Sensors,
-}
-
-impl FocusPanel {
-    pub(crate) fn next(self) -> Self {
-        match self {
-            Self::Controls => Self::Rgb,
-            Self::Rgb => Self::Controls, // Skip Sensors - it's read-only
-            Self::Sensors => Self::Controls,
-        }
-    }
-
-    pub(crate) fn previous(self) -> Self {
-        match self {
-            Self::Controls => Self::Rgb,
-            Self::Rgb => Self::Controls, // Skip Sensors - it's read-only
-            Self::Sensors => Self::Rgb,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ControlId {
-    ThermalProfile,
-    BacklightTimeout,
-    BatteryCalibration,
-    BatteryLimiter,
-    BootAnimation,
-    FanSpeed,
-    LcdOverride,
-    UsbCharging,
-}
-
-impl ControlId {
-    pub(crate) const ALL: [Self; 8] = [
-        Self::ThermalProfile,
-        Self::BatteryLimiter,
-        Self::FanSpeed,
-        Self::BacklightTimeout,
-        Self::BatteryCalibration,
-        Self::BootAnimation,
-        Self::LcdOverride,
-        Self::UsbCharging,
-    ];
-
-    /// The Capability a laptop needs for this control to be shown.
-    pub(crate) fn capability(self) -> Capability {
-        match self {
-            Self::ThermalProfile => Capability::ThermalProfile,
-            Self::BacklightTimeout => Capability::BacklightTimeout,
-            Self::BatteryCalibration => Capability::BatteryCalibration,
-            Self::BatteryLimiter => Capability::ChargeLimit,
-            Self::BootAnimation => Capability::BootAnimation,
-            Self::FanSpeed => Capability::Fans,
-            Self::LcdOverride => Capability::LcdOverdrive,
-            Self::UsbCharging => Capability::UsbCharging,
-        }
-    }
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::ThermalProfile => "Thermal Profile",
-            Self::BacklightTimeout => "Backlight Timeout",
-            Self::BatteryCalibration => "Battery Calibration",
-            Self::BatteryLimiter => "Battery Limit",
-            Self::BootAnimation => "Boot Animation",
-            Self::FanSpeed => "Fan Speed",
-            Self::LcdOverride => "LCD Override",
-            Self::UsbCharging => "USB Charging",
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ControlChoice {
-    pub(crate) value: String,
-    pub(crate) label: String,
-}
-
-impl ControlChoice {
-    pub(crate) fn new(value: impl Into<String>, label: impl Into<String>) -> Self {
-        Self {
-            value: value.into(),
-            label: label.into(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ControlKind {
-    Toggle,
-    Choice(Vec<ControlChoice>),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ControlItem {
-    pub(crate) id: ControlId,
-    pub(crate) raw: String,
-    pub(crate) display: String,
-    pub(crate) kind: ControlKind,
-    pub(crate) pending: Option<usize>,
-    pub(crate) last_error: Option<String>,
-}
-
-impl ControlItem {
-    pub(crate) fn label(&self) -> &'static str {
-        self.id.label()
-    }
-
-    pub(crate) fn pending_choice(&self) -> Option<&ControlChoice> {
-        match (&self.kind, self.pending) {
-            (ControlKind::Choice(choices), Some(index)) => choices.get(index),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn visible_value(&self) -> String {
-        self.pending_choice()
-            .map(|choice| choice.label.clone())
-            .unwrap_or_else(|| self.display.clone())
-    }
-
-    pub(crate) fn current_choice_index(&self) -> Option<usize> {
-        match &self.kind {
-            ControlKind::Choice(choices) => choices
-                .iter()
-                .position(|choice| choice.value == self.raw)
-                .or(Some(0)),
-            ControlKind::Toggle => None,
-        }
-    }
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SensorMetric {
@@ -185,33 +47,13 @@ pub(crate) struct SensorSnapshot {
     pub(crate) gpu_fan_mode: FanMode,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RgbField {
     Effect,
     Color,
     Brightness,
     Speed,
     Direction,
-}
-
-impl RgbField {
-    pub(crate) const ALL: [Self; 5] = [
-        Self::Effect,
-        Self::Color,
-        Self::Brightness,
-        Self::Speed,
-        Self::Direction,
-    ];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Effect => "Mode",
-            Self::Color => "Color",
-            Self::Brightness => "Brightness",
-            Self::Speed => "Speed",
-            Self::Direction => "Direction",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -452,10 +294,6 @@ impl RgbSettings {
         COLOR_PALETTE[self.color_idx]
     }
 
-    pub(crate) fn direction_name(&self) -> &'static str {
-        DIRECTIONS[self.direction_idx]
-    }
-
     pub(crate) fn adjust(&mut self, field: RgbField, step: i8) {
         match field {
             RgbField::Effect => {
@@ -490,7 +328,7 @@ fn wrap_index(current: usize, len: usize, step: i8) -> usize {
 }
 
 fn adjust_percent(current: u8, step: i8) -> u8 {
-    let delta = if step < 0 { -10 } else { 10 };
+    let delta = if step < 0 { -5 } else { 5 };
     (current as i16 + delta).clamp(0, 100) as u8
 }
 

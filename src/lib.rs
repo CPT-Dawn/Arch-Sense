@@ -9,8 +9,9 @@ pub mod hardware;
 pub mod keyboard;
 pub mod machine;
 pub mod models;
+mod settings;
 pub mod theme;
-pub mod ui;
+mod ui;
 
 use anyhow::Result;
 

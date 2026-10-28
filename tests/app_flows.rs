@@ -9,33 +9,35 @@ use crossterm::event::KeyCode;
 use common::Harness;
 
 #[test]
-fn choosing_a_thermal_profile_writes_it_to_the_platform_profile() {
+fn changing_the_thermal_profile_writes_it_at_once_and_confirms_in_the_footer() {
     let fake = FakeMachine::builder()
         .predator_sense()
         .build()
         .expect("fake machine");
     let mut app = Harness::start(&fake, RecordingTransport::default());
-    app.wait_until("controls to load", |app| {
-        app.line_with("Thermal Profile")
-            .is_some_and(|line| line.contains("Balanced"))
-    });
+    app.wait_for_scan();
+    assert_eq!(
+        app.highlighted("Thermal Profile").as_deref(),
+        Some("Balanced")
+    );
 
     app.press(KeyCode::Right);
-    app.press(KeyCode::Enter);
 
     let profile = fake.machine().platform_profile();
     app.wait_until("the profile write", |_| {
         fs::read_to_string(&profile).unwrap() == "performance"
     });
-    app.wait_until("the row to show the applied profile", |app| {
-        app.line_with("Thermal Profile").is_some_and(|line| {
-            line.contains("Performance") && !line.contains("PREVIEW") && !line.contains("APPLY")
-        })
+    app.wait_until("the footer confirmation", |app| {
+        app.screen().contains("✓ Thermal Profile → Performance")
     });
+    assert_eq!(
+        app.highlighted("Thermal Profile").as_deref(),
+        Some("Performance")
+    );
 }
 
 #[test]
-fn applying_lighting_sends_the_effect_to_the_keyboard_and_saves_it() {
+fn changing_the_lighting_sends_it_to_the_keyboard_and_saves_it() {
     let fake = FakeMachine::builder()
         .predator_sense()
         .usb_hid_keyboard()
@@ -43,42 +45,48 @@ fn applying_lighting_sends_the_effect_to_the_keyboard_and_saves_it() {
         .expect("fake machine");
     let keyboard = RecordingTransport::default();
     let mut app = Harness::start(&fake, keyboard.clone());
-    app.wait_until("the keyboard to be detected", |app| {
-        app.screen().contains("Ready")
+    app.wait_until("the Lighting section", |app| {
+        app.setting_labels().contains(&"Effect".to_string())
     });
 
-    app.press(KeyCode::Tab);
-    app.press(KeyCode::Enter);
+    app.press(KeyCode::Tab); // Battery
+    app.press(KeyCode::Tab); // System
+    app.press(KeyCode::Tab); // Lighting
+    assert_eq!(app.selected_setting().as_deref(), Some("Effect"));
+    app.press(KeyCode::Right); // Static → Breathing
 
     app.wait_until("the lighting to reach the keyboard", |_| {
         !keyboard.sent().is_empty()
     });
-    // Default lighting: Static, White, 30% brightness, 50% speed.
+    // Breathing, White, 30% brightness, 50% speed.
     assert_eq!(
         keyboard.sent(),
         vec![vec![
             [0xB1, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4E],
             [0x14, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0x00],
-            [0x08, 0x02, 0x01, 0x05, 0x0F, 0x01, 0x01, 0x9B],
+            [0x08, 0x02, 0x02, 0x05, 0x0F, 0x01, 0x01, 0x9B],
         ]]
     );
     let saved = fake.machine().state_dir().join("config.json");
     app.wait_until("the lighting to be saved", |_| saved.exists());
     let saved: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(saved).unwrap()).unwrap();
-    assert_eq!(saved["rgb"]["effect"], 1);
+    assert_eq!(saved["rgb"]["effect"], 2);
     assert_eq!(saved["rgb"]["brightness"], 30);
+    app.wait_until("the footer confirmation", |app| {
+        app.screen().contains("✓ Effect → Breathing · saved")
+    });
 }
 
 #[test]
-fn a_missing_keyboard_is_reported_in_the_footer() {
+fn a_laptop_without_a_keyboard_has_no_lighting_section() {
     let fake = FakeMachine::builder()
         .predator_sense()
         .build()
         .expect("fake machine");
     let mut app = Harness::start(&fake, RecordingTransport::default());
+    app.wait_for_scan();
 
-    app.wait_until("the keyboard status", |app| {
-        app.screen().contains("Keyboard Not Found")
-    });
+    assert!(!app.screen().contains("LIGHTING"));
+    assert!(!app.setting_labels().contains(&"Effect".to_string()));
 }
