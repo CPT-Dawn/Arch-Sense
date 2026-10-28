@@ -13,6 +13,7 @@ const NITRO_SENSE_FOLDER: &str = "nitro_sense";
 const TURBO_STATE: &str = "turbo_sense/turbo_state";
 const PLATFORM_PROFILE: &str = "/sys/firmware/acpi/platform_profile";
 const PLATFORM_PROFILE_CHOICES: &str = "/sys/firmware/acpi/platform_profile_choices";
+const DMI_PRODUCT_NAME: &str = "/sys/class/dmi/id/product_name";
 const HWMON_DIR: &str = "/sys/class/hwmon";
 const CPU_THERMAL_ZONE_TEMP: &str = "/sys/class/thermal/thermal_zone0/temp";
 const USB_DEVICES_DIR: &str = "/sys/bus/usb/devices";
@@ -89,6 +90,11 @@ impl MachineRoot {
     /// The Thermal Profile choices the firmware offers.
     pub fn platform_profile_choices(&self) -> PathBuf {
         self.resolve(PLATFORM_PROFILE_CHOICES)
+    }
+
+    /// The laptop's model name from DMI, e.g. `Predator PH16-71`.
+    pub fn dmi_product_name(&self) -> PathBuf {
+        self.resolve(DMI_PRODUCT_NAME)
     }
 
     /// The hwmon class folder, one `hwmonN` subfolder per sensor chip.

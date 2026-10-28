@@ -108,6 +108,24 @@ impl FakeMachineBuilder {
             .file(MachineRoot::platform_profile_choices, choices)
     }
 
+    /// The laptop's DMI model name, e.g. `Predator PH16-71`.
+    pub fn product_name(self, name: &str) -> Self {
+        self.file(MachineRoot::dmi_product_name, format!("{name}\n"))
+    }
+
+    /// Makes `path` readable but not writable, the way an attribute looks to a
+    /// user outside the `arch-sense` group. Root ignores this, so tests relying
+    /// on it should skip when run as root.
+    pub fn read_only(mut self, path: impl FnOnce(&MachineRoot) -> PathBuf + 'static) -> Self {
+        self.steps.push(Box::new(move |machine| {
+            let path = path(machine);
+            let mut permissions = fs::metadata(&path)?.permissions();
+            permissions.set_readonly(true);
+            fs::set_permissions(path, permissions)
+        }));
+        self
+    }
+
     /// The Turbo indicator Linuwu-Sense exposes on laptops with a Turbo key.
     pub fn turbo(self, engaged: bool) -> Self {
         self.file(MachineRoot::turbo_state, if engaged { "1" } else { "0" })

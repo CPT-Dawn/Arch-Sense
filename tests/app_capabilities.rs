@@ -13,48 +13,29 @@ use common::Harness;
 /// Every control row the app can show.
 const CONTROLS: [&str; 8] = [
     "Thermal Profile",
-    "Fan Speed",
-    "Battery Limit",
-    "Battery Calibration",
-    "USB Charging",
-    "Boot Animation",
-    "LCD Override",
-    "Backlight Timeout",
+    "Fans",
+    "Charge limit",
+    "Calibrate battery",
+    "USB charging",
+    "Boot animation",
+    "LCD overdrive",
+    "Backlight timeout",
 ];
 
 fn start(laptop: FakeMachineBuilder) -> (FakeMachine, Harness) {
     let fake = laptop.build().expect("fake machine");
     let mut app = Harness::start(&fake, RecordingTransport::default());
-    app.wait_until("the hardware scan", |app| {
-        !app.screen().contains("Waiting for hardware controls")
-    });
+    app.wait_for_scan();
     (fake, app)
 }
 
-/// The control rows on screen. A label must stand alone, so the sensor
-/// panel's "Fan Speeds" doesn't count as the "Fan Speed" control.
-fn shown_controls(app: &mut Harness) -> BTreeSet<&'static str> {
-    let screen = app.screen();
-    CONTROLS
-        .into_iter()
-        .filter(|label| {
-            screen.match_indices(label).any(|(at, _)| {
-                !screen[at + label.len()..].starts_with(|next: char| next.is_alphanumeric())
-            })
-        })
-        .collect()
+/// The settings rows on screen.
+fn shown_controls(app: &mut Harness) -> BTreeSet<String> {
+    app.setting_labels().into_iter().collect()
 }
 
-fn controls(labels: &[&'static str]) -> BTreeSet<&'static str> {
-    labels.iter().copied().collect()
-}
-
-/// The value shown in the Thermal Profile row, with its state tag.
-fn thermal_profile_row(app: &mut Harness) -> String {
-    let row = app.line_with("Thermal Profile").expect("thermal row");
-    let value = row.split("Thermal Profile").nth(1).expect("row value");
-    let value = value.split('│').next().unwrap_or_default();
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
+fn controls(labels: &[&str]) -> BTreeSet<String> {
+    labels.iter().map(|label| label.to_string()).collect()
 }
 
 #[test]
@@ -72,11 +53,11 @@ fn a_legacy_predator_hides_the_battery_controls_its_firmware_rejects() {
         shown_controls(&mut app),
         controls(&[
             "Thermal Profile",
-            "Fan Speed",
-            "USB Charging",
-            "Boot Animation",
-            "LCD Override",
-            "Backlight Timeout",
+            "Fans",
+            "USB charging",
+            "Boot animation",
+            "LCD overdrive",
+            "Backlight timeout",
         ])
     );
 }
@@ -89,14 +70,14 @@ fn a_nitro_shows_its_controls_and_is_not_reported_as_missing_the_module() {
         shown_controls(&mut app),
         controls(&[
             "Thermal Profile",
-            "Fan Speed",
-            "Battery Limit",
-            "Battery Calibration",
-            "USB Charging",
-            "Backlight Timeout",
+            "Fans",
+            "Charge limit",
+            "Calibrate battery",
+            "USB charging",
+            "Backlight timeout",
         ])
     );
-    assert!(!app.screen().contains("Kernel Module Missing"));
+    assert!(!app.screen().contains("Linuwu-Sense isn't loaded"));
 }
 
 #[test]
@@ -104,7 +85,7 @@ fn a_nitro_v4_shows_every_control_and_is_not_reported_as_missing_the_module() {
     let (_fake, mut app) = start(FakeMachine::builder().nitro_v4());
 
     assert_eq!(shown_controls(&mut app), controls(&CONTROLS));
-    assert!(!app.screen().contains("Kernel Module Missing"));
+    assert!(!app.screen().contains("Linuwu-Sense isn't loaded"));
 }
 
 #[test]
@@ -112,7 +93,7 @@ fn without_the_module_no_controls_are_offered() {
     let (_fake, mut app) = start(FakeMachine::builder().module_missing());
 
     assert!(shown_controls(&mut app).is_empty());
-    assert!(app.screen().contains("Kernel Module Missing"));
+    assert!(app.screen().contains("Linuwu-Sense isn't loaded"));
 }
 
 #[test]
@@ -120,11 +101,8 @@ fn nitro_controls_write_to_the_nitro_sense_interface() {
     let (fake, mut app) = start(FakeMachine::builder().nitro_sense());
     let limiter = fake.machine().nitro_sense_dir().join("battery_limiter");
 
-    app.press(KeyCode::Down);
-    app.wait_until("the Battery Limit row to be selected", |app| {
-        app.line_with("▸")
-            .is_some_and(|row| row.contains("Battery Limit"))
-    });
+    app.press(KeyCode::Tab);
+    assert_eq!(app.selected_setting().as_deref(), Some("Charge limit"));
     app.press(KeyCode::Enter);
 
     app.wait_until("the limiter write", |_| {
@@ -136,29 +114,36 @@ fn nitro_controls_write_to_the_nitro_sense_interface() {
 fn thermal_profile_options_are_the_firmware_choices() {
     let (fake, mut app) = start(FakeMachine::builder().nitro_v4());
 
-    let mut offered = Vec::new();
+    let row = app.row("Thermal Profile").expect("thermal row");
+    for profile in [
+        "Low Power",
+        "Quiet",
+        "Balanced",
+        "Balanced Performance",
+        "Performance",
+    ] {
+        assert!(row.contains(profile), "{profile:?} missing from {row:?}");
+    }
+
+    let mut chosen = Vec::new();
     for _ in 0..5 {
         app.press(KeyCode::Right);
-        offered.push(thermal_profile_row(&mut app));
+        chosen.push(app.highlighted("Thermal Profile").unwrap_or_default());
     }
 
     // Starting from Balanced, Right walks the firmware's list and wraps around.
     assert_eq!(
-        offered,
+        chosen,
         [
-            "Balanced Performance PREVIEW",
-            "Performance PREVIEW",
-            "Low Power PREVIEW",
-            "Quiet PREVIEW",
-            "Balanced PREVIEW",
+            "Balanced Performance",
+            "Performance",
+            "Low Power",
+            "Quiet",
+            "Balanced",
         ]
     );
 
-    app.press(KeyCode::Left);
-    app.press(KeyCode::Left);
-    app.press(KeyCode::Left);
-    app.press(KeyCode::Left);
-    app.press(KeyCode::Enter);
+    app.press(KeyCode::Right);
     let profile = fake.machine().platform_profile();
     app.wait_until("the profile write", |_| {
         std::fs::read_to_string(&profile).unwrap() == "balanced-performance"

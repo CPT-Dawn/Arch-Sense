@@ -61,6 +61,15 @@ impl Capability {
         Self::BacklightTimeout,
     ];
 
+    /// The file this Capability is read from and written to on `machine`, given
+    /// the laptop's Sense Interface. `None` when the interface has no such file.
+    pub fn path(self, machine: &MachineRoot, interface: SenseInterface) -> Option<PathBuf> {
+        match self.sense_attribute() {
+            Some(name) => interface.attribute(machine, name),
+            None => Some(machine.platform_profile()),
+        }
+    }
+
     /// The attribute file inside the Sense Interface folder, for Capabilities that live there.
     fn sense_attribute(self) -> Option<&'static str> {
         match self {
