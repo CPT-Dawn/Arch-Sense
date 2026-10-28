@@ -42,6 +42,9 @@ const DKMS_MOK_CERT: &str = "mok.pub";
 const SECURE_BOOT_VAR: &str =
     "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c";
 const HIDRAW_DIR: &str = "/sys/class/hidraw";
+/// Where a PH16-71 owner forces the Predator v4 quirk until upstream Linuwu-Sense
+/// knows the model again (0x7375646F/Linuwu-Sense#152).
+const PH16_71_MODPROBE_CONF: &str = "/etc/modprobe.d/linuwu-sense-ph16-71.conf";
 /// Present when the Boot Restore unit is enabled (`systemctl enable arch-sense`).
 const BOOT_RESTORE_LINK: &str = "/etc/systemd/system/multi-user.target.wants/arch-sense.service";
 /// v1's permission service is enabled through this link.
@@ -230,6 +233,11 @@ impl MachineRoot {
     /// The hidraw class folder, one `hidrawN` per HID device.
     pub fn hidraw_dir(&self) -> PathBuf {
         self.resolve(HIDRAW_DIR)
+    }
+
+    /// The modprobe options file that forces `predator_v4=1` on a PH16-71.
+    pub fn ph16_71_modprobe_conf(&self) -> PathBuf {
+        self.resolve(PH16_71_MODPROBE_CONF)
     }
 
     /// The symlink systemd creates when Boot Restore is enabled.

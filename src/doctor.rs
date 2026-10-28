@@ -31,6 +31,9 @@ const MODULE_LOCATIONS: [&str; 4] = [
 const ENE_KB5130_ID: &str = "00000CF2:00005130";
 const NEW_ISSUE: &str = "https://github.com/CPT-Dawn/Arch-Sense/issues/new";
 const UPSTREAM_ISSUES: &str = "https://github.com/0x7375646F/Linuwu-Sense/issues";
+/// The upstream fix for the PH16-71 losing its DMI entry; linuwu-sense-dkms-git
+/// carries it as a patch until it merges.
+const PH16_71_FIX: &str = "https://github.com/0x7375646F/Linuwu-Sense/pull/152";
 const ENE_NOTE: &str =
     "https://github.com/0x7375646F/Linuwu-Sense#note-for-2025-models-enek5130-keyboards";
 
@@ -468,6 +471,12 @@ fn sense_interface(machine: &MachineRoot, facts: &Facts) -> Check {
             "not found",
             "Fix the kernel module first",
         ),
+        SenseInterface::None if is_ph16_71(machine) => Check::not_ok(
+            NAME,
+            Status::Error,
+            "not found: this Linuwu-Sense lost the PH16-71's DMI entry",
+            ph16_71_remedy(),
+        ),
         SenseInterface::None => Check::not_ok(
             NAME,
             Status::Error,
@@ -477,6 +486,20 @@ fn sense_interface(machine: &MachineRoot, facts: &Facts) -> Check {
             ),
         ),
     }
+}
+
+fn is_ph16_71(machine: &MachineRoot) -> bool {
+    read(machine.dmi_product_name()).is_some_and(|model| model.contains("PH16-71"))
+}
+
+/// The fix for the upstream regression that dropped the PH16-71. Like
+/// [`secure_boot_remedy`], it names the real machine's paths.
+fn ph16_71_remedy() -> String {
+    let conf = MachineRoot::system().ph16_71_modprobe_conf();
+    format!(
+        "A known upstream regression ({PH16_71_FIX}). Update the module: `paru -S linuwu-sense-dkms-git` (it carries the fix), or force the quirk: `echo 'options linuwu_sense predator_v4=1' | sudo tee {}`; then reload it: `sudo modprobe -r linuwu_sense && sudo modprobe linuwu_sense`",
+        conf.display()
+    )
 }
 
 fn permissions(membership: Membership) -> Check {
