@@ -99,8 +99,8 @@ fn custom_colour(frame: &mut Frame, area: Rect, digits: &str) {
 }
 
 const BINDINGS: &[(&str, &str)] = &[
-    ("↑ k  ↓ j", "Select the previous or next setting"),
-    ("← h  → l", "Change the selected setting"),
+    ("↑ k  ↓ j", "Select the previous or next row"),
+    ("← h  → l", "Change the selected row"),
     ("Enter  Space", "Toggle, run, or step forward"),
     ("Tab  Shift-Tab", "Jump between sections"),
     ("#", "Type a custom hex colour (on Colour)"),

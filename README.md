@@ -66,7 +66,7 @@ you don't have them yet):
 paru -S arch-sense
 ```
 
-**2. Join the `arch-sense` group**, which is what lets you change settings without sudo:
+**2. Join the `arch-sense` group**, which is what lets Arch-Sense drive the hardware without sudo:
 
 ```bash
 sudo usermod -aG arch-sense $USER
@@ -202,7 +202,7 @@ sudo groupdel arch-sense
 
 ### I'm upgrading from v1. Anything to do?
 
-Mostly no. Your keyboard settings carry over to Saved Lighting automatically on first
+Mostly no. Your keyboard lighting carries over to Saved Lighting automatically on first
 run. Three things changed:
 
 - **Permissions are the package's job now.** v1's self-installing permission

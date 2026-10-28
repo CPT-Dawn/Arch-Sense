@@ -9,7 +9,7 @@ use crate::machine::MachineRoot;
 
 /// Boot Restore: reapplies the Saved Lighting, quietly doing nothing when
 /// nothing is saved or the keyboard it was saved for isn't here.
-pub fn apply_saved_config(
+pub fn apply_saved_lighting(
     machine: &MachineRoot,
     keyboard: &mut dyn KeyboardTransport,
 ) -> Result<()> {
