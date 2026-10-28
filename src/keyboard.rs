@@ -17,8 +17,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use rusb::{DeviceHandle, Error as UsbError, GlobalContext};
 
+use crate::constants::setup_hint;
 use crate::machine::MachineRoot;
-use crate::permissions::setup_hint;
 
 /// One HID feature report the keyboard controller understands.
 pub type Packet = [u8; 8];

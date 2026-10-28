@@ -8,7 +8,6 @@ pub mod hardware;
 pub mod keyboard;
 pub mod machine;
 pub mod models;
-pub mod permissions;
 pub mod theme;
 pub mod ui;
 

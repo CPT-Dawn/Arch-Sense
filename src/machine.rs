@@ -18,10 +18,9 @@ const USB_DEVICE_NODES_DIR: &str = "/dev/bus/usb";
 const STATE_DIR: &str = "/var/lib/arch-sense";
 const PROC_SELF_STATUS: &str = "/proc/self/status";
 const ETC_GROUP: &str = "/etc/group";
-const ETC_PASSWD: &str = "/etc/passwd";
+/// Where v1's pkexec self-installer put its files (v2 ships them in the package).
 const UDEV_RULE: &str = "/etc/udev/rules.d/70-arch-sense.rules";
 const PERMISSION_SERVICE: &str = "/etc/systemd/system/arch-sense-permissions.service";
-const INSTALLED_BINARY: &str = "/usr/bin/arch-sense";
 
 /// A base directory under which all well-known system paths resolve.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,19 +113,13 @@ impl MachineRoot {
         self.resolve(ETC_GROUP)
     }
 
-    pub fn etc_passwd(&self) -> PathBuf {
-        self.resolve(ETC_PASSWD)
-    }
-
+    /// v1's self-installed udev rule, now a leftover the user may remove.
     pub fn udev_rule(&self) -> PathBuf {
         self.resolve(UDEV_RULE)
     }
 
+    /// v1's self-installed permission service, now a leftover the user may remove.
     pub fn permission_service(&self) -> PathBuf {
         self.resolve(PERMISSION_SERVICE)
-    }
-
-    pub fn installed_binary(&self) -> PathBuf {
-        self.resolve(INSTALLED_BINARY)
     }
 }

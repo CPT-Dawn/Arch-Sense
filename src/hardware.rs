@@ -7,6 +7,7 @@ use std::thread;
 
 use anyhow::{Context, Result, bail};
 
+use crate::constants::setup_hint;
 use crate::constants::{BRIGHT_HW_MAX, PREAMBLE, SPEED_HW_FAST, SPEED_HW_SLOW};
 use crate::keyboard::{KeyboardTransport, Packet, UsbAccess, keyboard_access};
 use crate::machine::MachineRoot;
@@ -14,7 +15,6 @@ use crate::models::{
     ControlChoice, ControlId, ControlItem, ControlKind, FanMode, OFF_EFFECT_INDEX,
     RANDOM_COLOR_INDEX, Rgb, RgbSettings, SensorMetric, SensorSnapshot,
 };
-use crate::permissions::setup_hint;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SensorRole {
