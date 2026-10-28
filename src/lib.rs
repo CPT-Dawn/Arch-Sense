@@ -1,4 +1,5 @@
 pub mod app;
+pub mod capabilities;
 pub mod cli;
 pub mod commands;
 pub mod config;

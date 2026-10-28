@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 /// Where Linuwu-Sense hangs its attribute folders.
 const LINUWU_SENSE_DIR: &str = "/sys/module/linuwu_sense/drivers/platform:acer-wmi/acer-wmi";
 const PREDATOR_SENSE_FOLDER: &str = "predator_sense";
+const NITRO_SENSE_FOLDER: &str = "nitro_sense";
+const TURBO_STATE: &str = "turbo_sense/turbo_state";
 const PLATFORM_PROFILE: &str = "/sys/firmware/acpi/platform_profile";
 const PLATFORM_PROFILE_CHOICES: &str = "/sys/firmware/acpi/platform_profile_choices";
 const HWMON_DIR: &str = "/sys/class/hwmon";
@@ -67,6 +69,16 @@ impl MachineRoot {
     /// One attribute file of the Predator Sense Interface, e.g. `fan_speed`.
     pub fn predator_sense_attr(&self, name: &str) -> PathBuf {
         self.predator_sense_dir().join(name)
+    }
+
+    /// The Nitro Sense attribute folder (legacy Nitro and Nitro v4 alike).
+    pub fn nitro_sense_dir(&self) -> PathBuf {
+        self.linuwu_sense_dir().join(NITRO_SENSE_FOLDER)
+    }
+
+    /// The read-only Turbo indicator (`turbo_sense/turbo_state`).
+    pub fn turbo_state(&self) -> PathBuf {
+        self.linuwu_sense_dir().join(TURBO_STATE)
     }
 
     /// The ACPI platform profile (the Thermal Profile).

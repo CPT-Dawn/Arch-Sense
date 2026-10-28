@@ -7,6 +7,7 @@ use std::thread;
 
 use anyhow::{Context, Result, bail};
 
+use crate::capabilities::{Laptop, SenseInterface, detect};
 use crate::constants::{BRIGHT_HW_MAX, PREAMBLE, SPEED_HW_FAST, SPEED_HW_SLOW};
 use crate::keyboard::{KeyboardTransport, Packet, UsbAccess, keyboard_access};
 use crate::machine::MachineRoot;
@@ -63,7 +64,7 @@ pub(crate) enum HardwareEvent {
 
 #[derive(Clone, Debug)]
 pub(crate) struct HardwareSnapshot {
-    pub(crate) module_loaded: bool,
+    pub(crate) laptop: Laptop,
     pub(crate) keyboard: UsbAccess,
     pub(crate) sensors: SensorSnapshot,
     pub(crate) controls: Vec<ControlItem>,
@@ -141,14 +142,14 @@ fn worker_loop(
 }
 
 pub(crate) fn collect_snapshot(m: &MachineRoot) -> HardwareSnapshot {
-    let module_loaded = m.predator_sense_dir().exists();
-    let controls = load_controls(m);
-    let sensors = read_sensors(m);
+    let laptop = detect(m);
+    let controls = controls_for(m, &laptop);
+    let sensors = read_sensors(m, &laptop);
     let keyboard = keyboard_access(m);
-    let note = hardware_note(m, module_loaded, &sensors);
+    let note = hardware_note(m, &laptop, &sensors);
 
     HardwareSnapshot {
-        module_loaded,
+        laptop,
         keyboard,
         sensors,
         controls,
@@ -156,11 +157,11 @@ pub(crate) fn collect_snapshot(m: &MachineRoot) -> HardwareSnapshot {
     }
 }
 
-fn hardware_note(m: &MachineRoot, module_loaded: bool, sensors: &SensorSnapshot) -> Option<String> {
-    if !module_loaded {
+fn hardware_note(m: &MachineRoot, laptop: &Laptop, sensors: &SensorSnapshot) -> Option<String> {
+    if laptop.sense_interface == SenseInterface::None {
         return Some(format!(
-            "linuwu_sense module offline: missing {}",
-            m.predator_sense_dir().display()
+            "linuwu_sense module offline: no Sense Interface in {}",
+            m.linuwu_sense_dir().display()
         ));
     }
 
@@ -174,8 +175,8 @@ fn hardware_note(m: &MachineRoot, module_loaded: bool, sensors: &SensorSnapshot)
     .find_map(|metric| metric.error.clone())
 }
 
-fn read_sensors(m: &MachineRoot) -> SensorSnapshot {
-    let (cpu_fan, gpu_fan, cpu_fan_mode, gpu_fan_mode) = read_fan_telemetry(m);
+fn read_sensors(m: &MachineRoot, laptop: &Laptop) -> SensorSnapshot {
+    let (cpu_fan, gpu_fan, cpu_fan_mode, gpu_fan_mode) = read_fan_telemetry(m, laptop);
 
     SensorSnapshot {
         cpu_temp: read_cpu_temp(m),
@@ -263,8 +264,11 @@ fn read_gpu_temp_from_nvidia_smi() -> Result<f64> {
     }
 }
 
-fn read_fan_telemetry(m: &MachineRoot) -> (SensorMetric, SensorMetric, FanMode, FanMode) {
-    let linuwu_modes = read_linuwu_fan_modes(m);
+fn read_fan_telemetry(
+    m: &MachineRoot,
+    laptop: &Laptop,
+) -> (SensorMetric, SensorMetric, FanMode, FanMode) {
+    let linuwu_modes = read_linuwu_fan_modes(m, laptop);
     let samples = match collect_hwmon_fan_samples(m) {
         Ok(samples) => samples,
         Err(error) => {
@@ -322,8 +326,9 @@ fn read_fan_telemetry(m: &MachineRoot) -> (SensorMetric, SensorMetric, FanMode, 
     (cpu_fan, gpu_fan, cpu_mode, gpu_mode)
 }
 
-fn read_linuwu_fan_modes(m: &MachineRoot) -> Option<(FanMode, FanMode)> {
-    let raw = read_sysfs(&m.predator_sense_attr("fan_speed")).ok()?;
+fn read_linuwu_fan_modes(m: &MachineRoot, laptop: &Laptop) -> Option<(FanMode, FanMode)> {
+    let path = laptop.sense_interface.attribute(m, "fan_speed")?;
+    let raw = read_sysfs(&path).ok()?;
     let parts: Vec<&str> = raw.split(',').collect();
 
     let parse_mode = |index: usize| -> Option<FanMode> {
@@ -608,19 +613,25 @@ fn list_hwmon_dirs(m: &MachineRoot) -> Result<Vec<PathBuf>> {
     Ok(dirs)
 }
 
+/// The controls for every Capability the laptop has, re-detecting it first.
 pub(crate) fn load_controls(m: &MachineRoot) -> Vec<ControlItem> {
-    let thermal_choices = read_thermal_choices(m).unwrap_or_default();
+    controls_for(m, &detect(m))
+}
 
+fn controls_for(m: &MachineRoot, laptop: &Laptop) -> Vec<ControlItem> {
     ControlId::ALL
         .iter()
         .copied()
-        .map(|id| read_control(m, id, &thermal_choices))
+        .filter(|id| laptop.has(id.capability()))
+        .map(|id| read_control(m, laptop, id))
         .collect()
 }
 
-fn read_control(m: &MachineRoot, id: ControlId, thermal_choices: &[String]) -> ControlItem {
-    let kind = control_kind(id, thermal_choices);
-    let raw_result = read_sysfs(&control_path(m, id));
+fn read_control(m: &MachineRoot, laptop: &Laptop, id: ControlId) -> ControlItem {
+    let kind = control_kind(id, &laptop.thermal_profiles);
+    let raw_result = control_path(m, laptop.sense_interface, id)
+        .context("no Sense Interface")
+        .and_then(|path| read_sysfs(&path));
     let (raw, last_error) = match raw_result {
         Ok(raw) => (raw, None),
         Err(error) => ("N/A".to_string(), Some(error.to_string())),
@@ -636,26 +647,14 @@ fn read_control(m: &MachineRoot, id: ControlId, thermal_choices: &[String]) -> C
     }
 }
 
-fn read_thermal_choices(m: &MachineRoot) -> Result<Vec<String>> {
-    Ok(read_sysfs(&m.platform_profile_choices())?
-        .split_whitespace()
-        .map(ToOwned::to_owned)
-        .collect())
-}
-
-fn control_kind(id: ControlId, thermal_choices: &[String]) -> ControlKind {
+fn control_kind(id: ControlId, thermal_profiles: &[String]) -> ControlKind {
     match id {
-        ControlId::ThermalProfile => {
-            let choices = if thermal_choices.is_empty() {
-                vec![ControlChoice::new("N/A", "No profiles")]
-            } else {
-                thermal_choices
-                    .iter()
-                    .map(|choice| ControlChoice::new(choice, thermal_label(choice)))
-                    .collect()
-            };
-            ControlKind::Choice(choices)
-        }
+        ControlId::ThermalProfile => ControlKind::Choice(
+            thermal_profiles
+                .iter()
+                .map(|choice| ControlChoice::new(choice, thermal_label(choice)))
+                .collect(),
+        ),
         ControlId::FanSpeed => ControlKind::Choice(vec![
             ControlChoice::new("0,0", "Auto"),
             ControlChoice::new("100,100", "Max"),
@@ -670,29 +669,30 @@ fn control_kind(id: ControlId, thermal_choices: &[String]) -> ControlKind {
     }
 }
 
-/// The file a control reads from and writes to.
-fn control_path(m: &MachineRoot, id: ControlId) -> PathBuf {
-    match id {
-        ControlId::ThermalProfile => m.platform_profile(),
-        ControlId::BacklightTimeout => m.predator_sense_attr("backlight_timeout"),
-        ControlId::BatteryCalibration => m.predator_sense_attr("battery_calibration"),
-        ControlId::BatteryLimiter => m.predator_sense_attr("battery_limiter"),
-        ControlId::BootAnimation => m.predator_sense_attr("boot_animation_sound"),
-        ControlId::FanSpeed => m.predator_sense_attr("fan_speed"),
-        ControlId::LcdOverride => m.predator_sense_attr("lcd_override"),
-        ControlId::UsbCharging => m.predator_sense_attr("usb_charging"),
-    }
+/// The file a control reads from and writes to, if the laptop has a place for it.
+fn control_path(m: &MachineRoot, interface: SenseInterface, id: ControlId) -> Option<PathBuf> {
+    let attribute = match id {
+        ControlId::ThermalProfile => return Some(m.platform_profile()),
+        ControlId::BacklightTimeout => "backlight_timeout",
+        ControlId::BatteryCalibration => "battery_calibration",
+        ControlId::BatteryLimiter => "battery_limiter",
+        ControlId::BootAnimation => "boot_animation_sound",
+        ControlId::FanSpeed => "fan_speed",
+        ControlId::LcdOverride => "lcd_override",
+        ControlId::UsbCharging => "usb_charging",
+    };
+    interface.attribute(m, attribute)
 }
 
 fn write_control(m: &MachineRoot, id: ControlId, value: &str) -> Result<()> {
-    if value == "N/A" {
-        bail!(
-            "{} is unavailable because the hardware did not report choices",
-            id.label()
-        );
-    }
-
-    write_sysfs(&control_path(m, id), value)
+    let laptop = detect(m);
+    let path = Some(&laptop)
+        .filter(|laptop| laptop.has(id.capability()))
+        .and_then(|laptop| control_path(m, laptop.sense_interface, id));
+    let Some(path) = path else {
+        bail!("{} is not available on this laptop", id.label());
+    };
+    write_sysfs(&path, value)
 }
 
 fn display_control_value(id: ControlId, raw: &str) -> String {
@@ -730,6 +730,7 @@ fn thermal_label(raw: &str) -> &str {
     match raw {
         "quiet" => "Quiet",
         "balanced" => "Balanced",
+        "balanced-performance" => "Balanced Performance",
         "performance" => "Performance",
         "low-power" => "Low Power",
         other => other,
