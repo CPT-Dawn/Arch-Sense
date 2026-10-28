@@ -1,6 +1,10 @@
 [Unit]
-Description=Arch-Sense — Apply saved keyboard RGB settings
-After=multi-user.target
+Description=Arch-Sense — Restore saved keyboard lighting at boot
+# Linuwu-Sense restores its own Four-Zone state when the module loads, and the
+# udev rules hand the attributes/USB node to the arch-sense group once the
+# devices exist. Run after both, so Saved Lighting is what ends up on the keys.
+After=systemd-modules-load.service systemd-udev-settle.service
+Wants=systemd-udev-settle.service
 
 [Service]
 Type=oneshot

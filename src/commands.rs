@@ -13,9 +13,17 @@ pub fn apply_saved_config(
     machine: &MachineRoot,
     keyboard: &mut dyn KeyboardTransport,
 ) -> Result<()> {
-    let Some(lighting) = saved::load(machine)? else {
-        eprintln!("arch-sense: no Saved Lighting, nothing to restore");
-        return Ok(());
+    let lighting = match saved::load(machine) {
+        Ok(Some(lighting)) => lighting,
+        Ok(None) => {
+            eprintln!("arch-sense: no Saved Lighting, nothing to restore");
+            return Ok(());
+        }
+        // A bad file is the user's to fix in the app; it must not turn boot red.
+        Err(error) => {
+            eprintln!("arch-sense: warning: ignoring unreadable Saved Lighting: {error:#}");
+            return Ok(());
+        }
     };
 
     match lighting::detect(machine).backend() {

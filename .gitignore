@@ -21,3 +21,9 @@ target
 #.idea/
 
 /.skills.worktrees/
+
+# makepkg leftovers
+packaging/aur/*/*.tar.*
+packaging/aur/*/src/
+packaging/aur/*/pkg/
+*.pkg.tar.zst

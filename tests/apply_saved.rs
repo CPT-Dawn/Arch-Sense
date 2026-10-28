@@ -77,3 +77,123 @@ fn apply_restores_per_zone_colours_on_a_four_zone_keyboard() {
     );
     assert!(keyboard.sent().is_empty());
 }
+
+/// Everything under the fake machine's Four-Zone directory, by file name.
+fn four_zone_files(fake: &FakeMachine) -> Vec<(String, String)> {
+    let mut files: Vec<_> = fs::read_dir(fake.machine().four_zone_kb_dir())
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            (name, fs::read_to_string(&path).unwrap())
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+#[test]
+fn boot_restore_matches_applying_in_the_ui_on_usb_hid() {
+    use arch_sense::lighting::{self, LightingBackend, saved};
+
+    let backend = LightingBackend::UsbHid;
+    let lighting = arch_sense::lighting::Lighting {
+        effect: backend.effect("Wave").unwrap(),
+        brightness: 70,
+        speed: 40,
+        ..backend.default_lighting()
+    };
+    let build = || {
+        FakeMachine::builder()
+            .predator_sense()
+            .usb_hid_keyboard()
+            .build()
+            .unwrap()
+    };
+
+    // The UI path: the worker calls `lighting::apply` with the chosen Lighting.
+    let ui = build();
+    let mut ui_keyboard = RecordingTransport::default();
+    lighting::apply(&lighting, &ui.machine(), &mut ui_keyboard).unwrap();
+
+    let boot = build();
+    saved::save(&boot.machine(), &lighting).unwrap();
+    let mut boot_keyboard = RecordingTransport::default();
+    apply_saved_config(&boot.machine(), &mut boot_keyboard).unwrap();
+
+    assert!(!ui_keyboard.sent().is_empty());
+    assert_eq!(boot_keyboard.sent(), ui_keyboard.sent());
+}
+
+#[test]
+fn boot_restore_matches_applying_in_the_ui_on_four_zone() {
+    use arch_sense::lighting::{self, LightingBackend, saved};
+
+    let backend = LightingBackend::FourZone;
+    let lighting = arch_sense::lighting::Lighting {
+        effect: backend.effect("Wave").unwrap(),
+        brightness: 55,
+        speed: 80,
+        direction: "Left",
+        ..backend.default_lighting()
+    };
+    let build = || {
+        FakeMachine::builder()
+            .predator_sense()
+            .four_zoned_kb()
+            .build()
+            .unwrap()
+    };
+
+    let ui = build();
+    lighting::apply(&lighting, &ui.machine(), &mut RecordingTransport::default()).unwrap();
+
+    let boot = build();
+    saved::save(&boot.machine(), &lighting).unwrap();
+    apply_saved_config(&boot.machine(), &mut RecordingTransport::default()).unwrap();
+
+    assert_eq!(four_zone_files(&boot), four_zone_files(&ui));
+    let untouched = build();
+    assert_ne!(four_zone_files(&boot), four_zone_files(&untouched));
+}
+
+#[test]
+fn boot_restore_with_nothing_saved_writes_nothing() {
+    for four_zone in [false, true] {
+        let builder = FakeMachine::builder().predator_sense();
+        let fake = if four_zone {
+            builder.four_zoned_kb()
+        } else {
+            builder.usb_hid_keyboard()
+        }
+        .build()
+        .unwrap();
+        let before = four_zone.then(|| four_zone_files(&fake));
+        let mut keyboard = RecordingTransport::default();
+
+        apply_saved_config(&fake.machine(), &mut keyboard).expect("apply succeeds");
+
+        assert!(keyboard.sent().is_empty());
+        assert_eq!(four_zone.then(|| four_zone_files(&fake)), before);
+    }
+}
+
+#[test]
+fn boot_restore_survives_a_corrupt_saved_lighting_file() {
+    use arch_sense::lighting::saved;
+
+    let fake = FakeMachine::builder()
+        .predator_sense()
+        .usb_hid_keyboard()
+        .build()
+        .unwrap();
+    let path = saved::path(&fake.machine());
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "{ this is not json").unwrap();
+    let mut keyboard = RecordingTransport::default();
+
+    apply_saved_config(&fake.machine(), &mut keyboard)
+        .expect("a corrupt file must not turn boot red");
+
+    assert!(keyboard.sent().is_empty());
+}
