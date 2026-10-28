@@ -185,6 +185,22 @@ Reboot and confirm the enrollment in the blue MokManager screen. If you manage y
 own keys (for example with `sbctl`), sign with those instead by pointing
 `mok_signing_key` and `mok_certificate` in `/etc/dkms/framework.conf` at them.
 
+### My PH16-71 loads the module but Arch-Sense finds no controls
+
+Upstream Linuwu-Sense briefly dropped the PH16-71 from its model list, so the module
+loads without creating its `predator_sense` controls. The fix is pending upstream
+([Linuwu-Sense#152](https://github.com/0x7375646F/Linuwu-Sense/pull/152)), and
+`linuwu-sense-dkms-git` already carries it, so updating is enough:
+`paru -S linuwu-sense-dkms-git`. If you built the module some other way, tell it which
+model it is talking to and reload it:
+
+```bash
+echo 'options linuwu_sense predator_v4=1' | sudo tee /etc/modprobe.d/linuwu-sense-ph16-71.conf
+sudo modprobe -r linuwu_sense && sudo modprobe linuwu_sense
+```
+
+Delete that file once upstream has the fix. `arch-sense doctor` spots this case.
+
 ### How do I uninstall it?
 
 ```bash

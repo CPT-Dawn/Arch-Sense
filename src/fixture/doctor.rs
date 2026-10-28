@@ -20,6 +20,13 @@ impl FakeMachineBuilder {
             .boot_restore()
     }
 
+    /// A PH16-71 running a Linuwu-Sense that lost the model's DMI entry
+    /// (upstream #103): the module loads, but with no Sense Interface.
+    pub fn ph16_71_without_dmi_entry(self) -> Self {
+        self.healthy_ph16_71()
+            .without(MachineRoot::predator_sense_dir)
+    }
+
     /// An Acer laptop of model `model` according to DMI.
     pub fn acer(self, model: &str) -> Self {
         self.file(MachineRoot::dmi_sys_vendor, "Acer\n")

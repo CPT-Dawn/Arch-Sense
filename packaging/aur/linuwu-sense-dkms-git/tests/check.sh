@@ -2,7 +2,7 @@
 # Scripted checks for the linuwu-sense-dkms-git package (ticket #17, ADR-0002).
 # Seams: `makepkg --printsrcinfo`, the built package archive, and `dkms` driven
 # against private trees (no root, nothing installed, no module loaded).
-# Usage: tests/check.sh [srcinfo|package|dkms|clang]...   (default: all)
+# Usage: tests/check.sh [srcinfo|package|patch|dkms|clang]...   (default: all)
 set -uo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -78,6 +78,49 @@ check_package() {
   fi
 }
 
+# The carried PH16-71 patch (upstream PR #152). prepare() runs on its own against
+# copies of the upstream checkout makepkg fetched for build_package.
+ph16_71_entry='DMI_PRODUCT_NAME, *"Predator PH16-71"'
+ph16_71_entries() { grep -Ec "$ph16_71_entry" "$1/linuwu-sense/src/linuwu_sense.c"; }
+run_prepare() { # run_prepare <srcdir>: the PKGBUILD's prepare() with $srcdir pointing there
+  (cd "$1" && bash -c 'set -e; source "$1"; srcdir=$2; prepare' _ "$work/pkg/PKGBUILD" "$1")
+}
+fails() { ! "$@"; }
+upstream_copy() { # upstream_copy <name>: a pristine upstream checkout plus our local sources
+  local dir=$work/prep-$1
+  rm -rf "$dir"
+  cp -r "$work/build/linuwu-sense-dkms-git/src" "$dir"
+  git -C "$dir/linuwu-sense" checkout -q -- .
+  echo "$dir"
+}
+
+check_patch() {
+  build_package || return
+  local src=$root/usr/src/linuwu-sense-$ver/src/linuwu_sense.c dir
+  expect "shipped source has the PH16-71 DMI entry" grep -Eq "$ph16_71_entry" "$src"
+  expect "PH16-71 entry uses the Predator v4 quirk" \
+    bash -c 'grep -EA3 "$1" "$2" | grep -q "driver_data = &quirk_acer_predator_v4"' _ "$ph16_71_entry" "$src"
+
+  dir=$(upstream_copy fresh)
+  if (($(ph16_71_entries "$dir") == 0)); then
+    expect "patch applies cleanly to current upstream" run_prepare "$dir"
+    expect "patch adds exactly one PH16-71 entry" test "$(ph16_71_entries "$dir")" -eq 1
+  else
+    echo "skip patch-applies check (upstream has the PH16-71 entry again: drop the patch)"
+  fi
+
+  dir=$(upstream_copy merged)
+  # Simulate upstream merging #152: the entry is already in the source.
+  git -C "$dir/linuwu-sense" apply "$work"/pkg/*ph16-71*.patch 2>/dev/null
+  expect "prepare skips the patch once upstream has the entry" run_prepare "$dir"
+  expect "no duplicate PH16-71 entry after an upstream merge" test "$(ph16_71_entries "$dir")" -eq 1
+
+  dir=$(upstream_copy drifted)
+  # Upstream moved on without the entry: the patch context is gone.
+  sed -i '/"Acer Predator PH18-71"/d' "$dir/linuwu-sense/src/linuwu_sense.c"
+  expect "prepare fails loudly when the patch no longer applies" fails run_prepare "$dir"
+}
+
 dkms_setup() { # private dkms trees seeded from the built package; sets $dk (command prefix)
   build_package || return 1
   [[ -d $work/dkms ]] && return 0
@@ -132,11 +175,12 @@ check_clang() {
   [[ $seen == 'LLVM-SEEN=[]' ]] && pass "gcc-built kernel does not get LLVM=1" || { cat "$work/dkms-gcc.log"; fail "gcc-built kernel does not get LLVM=1 (saw '$seen')"; }
 }
 
-(($# > 0)) || set -- srcinfo package dkms clang
+(($# > 0)) || set -- srcinfo package patch dkms clang
 for t in "$@"; do
   case $t in
     srcinfo) check_srcinfo ;;
     package) check_package ;;
+    patch) check_patch ;;
     dkms) check_dkms ;;
     clang) check_clang ;;
     *) echo "unknown check: $t" >&2; fails=$((fails + 1)) ;;

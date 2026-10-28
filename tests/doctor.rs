@@ -253,13 +253,46 @@ fn v1_leftovers_are_listed_for_removal() {
 #[test]
 fn a_model_linuwu_sense_does_not_know_is_explained() {
     let report = diagnose(
-        healthy().without(|m| m.predator_sense_dir()),
+        healthy()
+            .acer("Predator PH18-72")
+            .without(|m| m.predator_sense_dir()),
         Membership::Member,
     );
 
     let sense = check(&report, "Sense Interface");
     assert_eq!(sense.status, Status::Error);
     assert!(remedy(sense).contains("predator_v4=1"));
+    assert!(!remedy(sense).contains("PH16-71"), "{report}");
+}
+
+#[test]
+fn a_ph16_71_without_its_dmi_entry_gets_the_known_regression_fix() {
+    let report = diagnose(
+        FakeMachine::builder().ph16_71_without_dmi_entry(),
+        Membership::Member,
+    );
+
+    let sense = only_problem(&report);
+    assert_eq!(sense.name, "Sense Interface");
+    assert_eq!(sense.status, Status::Error);
+    let remedy = remedy(sense);
+    assert!(remedy.contains("known upstream regression"), "{remedy}");
+    assert!(
+        remedy.contains("https://github.com/0x7375646F/Linuwu-Sense/pull/152"),
+        "{remedy}"
+    );
+    assert!(remedy.contains("paru -S linuwu-sense-dkms-git"), "{remedy}");
+    // The commands run on the real machine, never on the fake tree under test.
+    assert!(
+        remedy.contains(
+            "`echo 'options linuwu_sense predator_v4=1' | sudo tee /etc/modprobe.d/linuwu-sense-ph16-71.conf`"
+        ),
+        "{remedy}"
+    );
+    assert!(
+        remedy.contains("`sudo modprobe -r linuwu_sense && sudo modprobe linuwu_sense`"),
+        "{remedy}"
+    );
 }
 
 #[test]
@@ -280,6 +313,7 @@ fn every_check_that_is_not_ok_carries_a_remedy() {
                 .without(|m| m.usb_devices_dir())
                 .jing_mold_keyboard(),
             FakeMachine::builder().predator_sense(),
+            FakeMachine::builder().ph16_71_without_dmi_entry(),
         ]
     };
     for membership in [
