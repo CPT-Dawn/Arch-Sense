@@ -1,8 +1,8 @@
-use anyhow::Result;
 use crate::config::AppConfig;
+use crate::hardware;
 use crate::models::RgbSettings;
 use crate::permissions;
-use crate::hardware;
+use anyhow::Result;
 
 pub fn print_permission_report() -> Result<()> {
     permissions::print_permission_report()

@@ -5,7 +5,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::config::AppConfig;
-use crate::hardware::{spawn_worker, HardwareEvent, HardwareHandle, HardwareRequest};
+use crate::hardware::{HardwareEvent, HardwareHandle, HardwareRequest, spawn_worker};
 use crate::models::{
     ControlId, ControlItem, ControlKind, FanMode, FocusPanel, RgbField, RgbSettings, SensorMetric,
     SensorSnapshot,
@@ -218,12 +218,11 @@ impl App {
             }
 
             let timeout = FRAME_INTERVAL.saturating_sub(frame_started.elapsed());
-            if event::poll(timeout)? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
-                        self.on_key(key);
-                    }
-                }
+            if event::poll(timeout)?
+                && let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press
+            {
+                self.on_key(key);
             }
         }
 
@@ -492,10 +491,7 @@ impl App {
             return;
         }
 
-        match self
-            .hardware
-            .send(HardwareRequest::ApplyRgb(self.rgb))
-        {
+        match self.hardware.send(HardwareRequest::ApplyRgb(self.rgb)) {
             Ok(()) => {
                 self.rgb_pending = true;
                 self.set_message(MessageLevel::Info, "Applying keyboard lighting");
@@ -517,11 +513,11 @@ impl App {
 
         self.controls = controls;
 
-        if let Some(id) = selected_id {
-            if let Some(index) = self.controls.iter().position(|item| item.id == id) {
-                self.selected_control = index;
-                return;
-            }
+        if let Some(id) = selected_id
+            && let Some(index) = self.controls.iter().position(|item| item.id == id)
+        {
+            self.selected_control = index;
+            return;
         }
 
         if self.selected_control >= self.controls.len() {

@@ -5,17 +5,17 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::constants::{
-    ps, BRIGHT_HW_MAX, CPU_TEMP_PATH, KB_EP, KB_IFACE, PLATFORM_PROFILE, PREAMBLE, PROFILE_CHOICES,
-    PS_BASE, SPEED_HW_FAST, SPEED_HW_SLOW, USB_TIMEOUT,
+    BRIGHT_HW_MAX, CPU_TEMP_PATH, KB_EP, KB_IFACE, PLATFORM_PROFILE, PREAMBLE, PROFILE_CHOICES,
+    PS_BASE, SPEED_HW_FAST, SPEED_HW_SLOW, USB_TIMEOUT, ps,
 };
 use crate::models::{
-    ControlChoice, ControlId, ControlItem, ControlKind, FanMode, Rgb, RgbSettings, SensorMetric,
-    SensorSnapshot, OFF_EFFECT_INDEX, RANDOM_COLOR_INDEX,
+    ControlChoice, ControlId, ControlItem, ControlKind, FanMode, OFF_EFFECT_INDEX,
+    RANDOM_COLOR_INDEX, Rgb, RgbSettings, SensorMetric, SensorSnapshot,
 };
-use crate::permissions::{keyboard_access, keyboard_present, open_keyboard, setup_hint, UsbAccess};
+use crate::permissions::{UsbAccess, keyboard_access, keyboard_present, open_keyboard, setup_hint};
 
 const HWMON_BASE: &str = "/sys/class/hwmon";
 

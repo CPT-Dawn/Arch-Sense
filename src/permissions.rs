@@ -6,11 +6,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use rusb::{DeviceHandle, Error as UsbError, GlobalContext};
 
 use crate::config::{config_dir, config_path};
-use crate::constants::{ps, KB_PID, KB_VID, PLATFORM_PROFILE};
+use crate::constants::{KB_PID, KB_VID, PLATFORM_PROFILE, ps};
 
 pub(crate) const HARDWARE_GROUP: &str = "arch-sense";
 
@@ -343,7 +343,9 @@ fn reexec_install_permissions() -> Result<()> {
                 .context("failed to execute sudo")?;
 
             if !status.success() {
-                bail!("elevation failed via both pkexec and sudo; manually run `sudo arch-sense --install-permissions`")
+                bail!(
+                    "elevation failed via both pkexec and sudo; manually run `sudo arch-sense --install-permissions`"
+                )
             }
         }
     }

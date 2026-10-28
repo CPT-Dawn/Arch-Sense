@@ -1,7 +1,7 @@
 use anyhow::Result;
-use clap::Parser;
 use arch_sense::cli::Cli;
 use arch_sense::commands;
+use clap::Parser;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
