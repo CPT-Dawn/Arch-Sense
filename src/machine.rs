@@ -16,6 +16,8 @@ const PLATFORM_PROFILE_CHOICES: &str = "/sys/firmware/acpi/platform_profile_choi
 const DMI_PRODUCT_NAME: &str = "/sys/class/dmi/id/product_name";
 const HWMON_DIR: &str = "/sys/class/hwmon";
 const CPU_THERMAL_ZONE_TEMP: &str = "/sys/class/thermal/thermal_zone0/temp";
+const POWER_SUPPLY_DIR: &str = "/sys/class/power_supply";
+const NVIDIA_SMI: &str = "/usr/bin/nvidia-smi";
 const USB_DEVICES_DIR: &str = "/sys/bus/usb/devices";
 const USB_DEVICE_NODES_DIR: &str = "/dev/bus/usb";
 const STATE_DIR: &str = "/var/lib/arch-sense";
@@ -104,6 +106,16 @@ impl MachineRoot {
     /// The thermal-zone fallback for CPU temperature.
     pub fn cpu_thermal_zone_temp(&self) -> PathBuf {
         self.resolve(CPU_THERMAL_ZONE_TEMP)
+    }
+
+    /// The power-supply class folder: batteries and mains adapters.
+    pub fn power_supply_dir(&self) -> PathBuf {
+        self.resolve(POWER_SUPPLY_DIR)
+    }
+
+    /// The `nvidia-smi` program, the GPU temperature fallback when hwmon has no GPU sensor.
+    pub fn nvidia_smi(&self) -> PathBuf {
+        self.resolve(NVIDIA_SMI)
     }
 
     /// The sysfs USB device folder, one subfolder per device and interface.
