@@ -59,23 +59,26 @@ pub(crate) enum LightingField {
     Direction,
 }
 
-/// Every setting, in list order.
-const ORDER: [SettingId; 14] = [
-    SettingId::Hardware(Capability::ThermalProfile),
-    SettingId::Hardware(Capability::Fans),
-    SettingId::Hardware(Capability::ChargeLimit),
-    SettingId::Hardware(Capability::UsbCharging),
-    SettingId::Hardware(Capability::BatteryCalibration),
-    SettingId::Hardware(Capability::BootAnimation),
-    SettingId::Hardware(Capability::LcdOverdrive),
-    SettingId::Hardware(Capability::BacklightTimeout),
-    SettingId::Lighting(LightingField::Effect),
-    SettingId::Lighting(LightingField::Zone),
-    SettingId::Lighting(LightingField::Colour),
-    SettingId::Lighting(LightingField::Brightness),
-    SettingId::Lighting(LightingField::Speed),
-    SettingId::Lighting(LightingField::Direction),
-];
+impl LightingField {
+    /// Every lighting parameter, in list order.
+    const ALL: [Self; 6] = [
+        Self::Effect,
+        Self::Zone,
+        Self::Colour,
+        Self::Brightness,
+        Self::Speed,
+        Self::Direction,
+    ];
+}
+
+/// Every setting, in list order: the Capabilities in [`Capability::ALL`]'s
+/// order, then the lighting parameters.
+fn order() -> impl Iterator<Item = SettingId> {
+    Capability::ALL
+        .into_iter()
+        .map(SettingId::Hardware)
+        .chain(LightingField::ALL.into_iter().map(SettingId::Lighting))
+}
 
 impl SettingId {
     pub(crate) fn section(self) -> Section {
@@ -221,8 +224,7 @@ pub(crate) struct SettingsModel {
 impl SettingsModel {
     /// The visible rows, in list order.
     pub(crate) fn rows(&self) -> Vec<Setting> {
-        ORDER
-            .into_iter()
+        order()
             .filter_map(|id| {
                 self.control(id).map(|control| Setting {
                     id,

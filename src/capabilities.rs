@@ -41,21 +41,22 @@ pub enum Capability {
     ThermalProfile,
     Fans,
     ChargeLimit,
-    BatteryCalibration,
     UsbCharging,
+    BatteryCalibration,
     BootAnimation,
     LcdOverdrive,
     BacklightTimeout,
 }
 
 impl Capability {
-    /// Every Capability, in the order the UI lists them.
+    /// Every Capability, in the order the UI lists them. The settings list
+    /// takes its order from here; nothing else spells it out.
     pub const ALL: [Self; 8] = [
         Self::ThermalProfile,
         Self::Fans,
         Self::ChargeLimit,
-        Self::BatteryCalibration,
         Self::UsbCharging,
+        Self::BatteryCalibration,
         Self::BootAnimation,
         Self::LcdOverdrive,
         Self::BacklightTimeout,
