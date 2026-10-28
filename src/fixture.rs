@@ -25,6 +25,17 @@ use tempfile::TempDir;
 use crate::keyboard::{USB_HID_PRODUCT_ID, USB_HID_VENDOR_ID};
 use crate::machine::MachineRoot;
 
+/// Every attribute a Predator (PH16-71) or Nitro v4 Sense Interface exposes.
+const FULL_ATTRS: [(&str, &str); 7] = [
+    ("backlight_timeout", "0"),
+    ("battery_calibration", "0"),
+    ("battery_limiter", "1"),
+    ("boot_animation_sound", "0"),
+    ("fan_speed", "0,0"),
+    ("lcd_override", "0"),
+    ("usb_charging", "0"),
+];
+
 type Step = Box<dyn FnOnce(&MachineRoot) -> io::Result<()>>;
 
 /// A fake machine tree. The directory is deleted when this is dropped.
@@ -57,26 +68,57 @@ impl FakeMachineBuilder {
     /// Linuwu-Sense loaded with the Predator Sense Interface (every attribute
     /// a PH16-71 exposes) and an ACPI platform profile.
     pub fn predator_sense(self) -> Self {
-        const ATTRS: [(&str, &str); 7] = [
+        self.sense_interface(MachineRoot::predator_sense_dir, &FULL_ATTRS)
+            .thermal_profile("balanced", "quiet balanced performance")
+    }
+
+    /// Linuwu-Sense loaded with the legacy Nitro Sense Interface (e.g. ANV15-51):
+    /// no LCD overdrive and no boot animation.
+    pub fn nitro_sense(self) -> Self {
+        const ATTRS: [(&str, &str); 5] = [
             ("backlight_timeout", "0"),
             ("battery_calibration", "0"),
-            ("battery_limiter", "1"),
-            ("boot_animation_sound", "0"),
+            ("battery_limiter", "0"),
             ("fan_speed", "0,0"),
-            ("lcd_override", "0"),
             ("usb_charging", "0"),
         ];
+        self.sense_interface(MachineRoot::nitro_sense_dir, &ATTRS)
+            .thermal_profile("balanced", "low-power balanced performance")
+    }
 
-        let mut builder = self;
-        for (name, value) in ATTRS {
-            builder = builder.file(move |m| m.predator_sense_attr(name), value);
-        }
-        builder
-            .file(MachineRoot::platform_profile, "balanced")
-            .file(
-                MachineRoot::platform_profile_choices,
-                "quiet balanced performance",
+    /// Linuwu-Sense loaded with the Nitro v4 Sense Interface (e.g. AN16-41): the
+    /// Nitro Sense folder carrying the full Predator attribute set.
+    pub fn nitro_v4(self) -> Self {
+        self.sense_interface(MachineRoot::nitro_sense_dir, &FULL_ATTRS)
+            .thermal_profile(
+                "balanced",
+                "low-power quiet balanced balanced-performance performance",
             )
+    }
+
+    /// A laptop whose sensors work but Linuwu-Sense isn't loaded: no Sense
+    /// Interface and no platform profile.
+    pub fn module_missing(self) -> Self {
+        self.sensors()
+    }
+
+    /// The firmware's Thermal Profile: the current one and the space-separated choices.
+    pub fn thermal_profile(self, current: &str, choices: &str) -> Self {
+        self.file(MachineRoot::platform_profile, current)
+            .file(MachineRoot::platform_profile_choices, choices)
+    }
+
+    /// The Turbo indicator Linuwu-Sense exposes on laptops with a Turbo key.
+    pub fn turbo(self, engaged: bool) -> Self {
+        self.file(MachineRoot::turbo_state, if engaged { "1" } else { "0" })
+    }
+
+    /// A legacy Predator (e.g. PH315-52): the full Predator Sense Interface, but
+    /// the firmware rejects every read of the battery attributes.
+    pub fn predator_legacy(self) -> Self {
+        self.predator_sense()
+            .unreadable(|m| m.predator_sense_attr("battery_limiter"))
+            .unreadable(|m| m.predator_sense_attr("battery_calibration"))
     }
 
     /// hwmon chips for CPU and GPU temperature and two fans.
@@ -142,6 +184,47 @@ impl FakeMachineBuilder {
         builder
     }
 
+    /// Removes `path` (file or folder) laid down by an earlier piece.
+    pub fn without(mut self, path: impl FnOnce(&MachineRoot) -> PathBuf + 'static) -> Self {
+        self.steps.push(Box::new(move |machine| {
+            let path = path(machine);
+            if path.is_dir() {
+                fs::remove_dir_all(path)
+            } else if path.exists() {
+                fs::remove_file(path)
+            } else {
+                Ok(())
+            }
+        }));
+        self
+    }
+
+    fn sense_interface(
+        self,
+        folder: fn(&MachineRoot) -> PathBuf,
+        attrs: &[(&'static str, &'static str)],
+    ) -> Self {
+        let mut builder = self;
+        for &(name, value) in attrs {
+            builder = builder.file(move |m| folder(m).join(name), value);
+        }
+        builder
+    }
+
+    /// Makes `path` exist but fail every read, the way an attribute the firmware
+    /// rejects does (ENODEV). A directory stands in for the file, so the read
+    /// fails whoever runs the tests, root included.
+    fn unreadable(mut self, path: impl FnOnce(&MachineRoot) -> PathBuf + 'static) -> Self {
+        self.steps.push(Box::new(move |machine| {
+            let path = path(machine);
+            if path.is_file() {
+                fs::remove_file(&path)?;
+            }
+            fs::create_dir_all(path)
+        }));
+        self
+    }
+
     fn file(
         mut self,
         path: impl FnOnce(&MachineRoot) -> PathBuf + 'static,
@@ -150,6 +233,9 @@ impl FakeMachineBuilder {
         let contents = contents.into();
         self.steps.push(Box::new(move |machine| {
             let path = path(machine);
+            if path.is_dir() {
+                fs::remove_dir_all(&path)?; // an earlier `unreadable` stand-in
+            }
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }

@@ -1,3 +1,4 @@
+use crate::capabilities::Capability;
 use crate::config::RgbConfig;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +49,20 @@ impl ControlId {
         Self::LcdOverride,
         Self::UsbCharging,
     ];
+
+    /// The Capability a laptop needs for this control to be shown.
+    pub(crate) fn capability(self) -> Capability {
+        match self {
+            Self::ThermalProfile => Capability::ThermalProfile,
+            Self::BacklightTimeout => Capability::BacklightTimeout,
+            Self::BatteryCalibration => Capability::BatteryCalibration,
+            Self::BatteryLimiter => Capability::ChargeLimit,
+            Self::BootAnimation => Capability::BootAnimation,
+            Self::FanSpeed => Capability::Fans,
+            Self::LcdOverride => Capability::LcdOverdrive,
+            Self::UsbCharging => Capability::UsbCharging,
+        }
+    }
 
     pub(crate) fn label(self) -> &'static str {
         match self {
