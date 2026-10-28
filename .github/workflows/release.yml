@@ -1,0 +1,120 @@
+name: Release to AUR
+
+# Publishing a GitHub release pushes the arch-sense package to the AUR.
+#
+#   1. bump the checked-in PKGBUILD to the release tarball (pkgver + sha256)
+#   2. verify all checksums for real and regenerate .SRCINFO (makepkg --printsrcinfo)
+#   3. push PKGBUILD, .SRCINFO and the packaged files to the AUR as CPT_Dawn
+#   4. commit the bumped PKGBUILD back to the default branch
+#
+# Only arch-sense is published here. linuwu-sense-dkms-git is published by hand.
+#
+# Repository secret (Settings > Secrets and variables > Actions), NOT created by
+# this repo's code:
+#   AUR_SSH_PRIVATE_KEY   private half of an SSH key whose public half is added to
+#                         the CPT_Dawn AUR account. Raw PEM/OpenSSH text, or the same
+#                         thing base64-encoded. Use a dedicated key, no passphrase.
+#
+# Manual runs (workflow_dispatch) are dry runs unless "publish" is ticked: they
+# build and verify the payload but push nothing.
+
+on:
+    release:
+        types: [published]
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Release tag (example: v2.0.0)"
+                required: true
+            publish:
+                description: "Actually push to the AUR (default: dry run)"
+                type: boolean
+                default: false
+
+permissions:
+    contents: write # only to commit the bumped PKGBUILD back to the default branch
+
+concurrency:
+    group: aur-release
+    cancel-in-progress: false
+
+jobs:
+    aur:
+        runs-on: ubuntu-latest
+        container: archlinux:base-devel
+        env:
+            TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
+            PUBLISH: ${{ github.event_name == 'release' || inputs.publish }}
+        steps:
+            - name: Install tooling
+              run: |
+                  pacman -Syu --noconfirm --needed git openssh curl
+                  useradd -m builder
+
+            - uses: actions/checkout@v4
+              with:
+                  ref: ${{ env.TAG }}
+
+            - name: Build and verify the AUR payload
+              run: |
+                  chown -R builder:builder .
+                  runuser -u builder -- git config --global --add safe.directory "$PWD"
+                  mkdir -p /tmp/aur-payload && chown builder:builder /tmp/aur-payload
+                  runuser -u builder -- env HOME=/home/builder \
+                      .github/scripts/prepare-aur-release.sh "$TAG" /tmp/aur-payload
+
+            - name: Configure SSH for the AUR
+              if: env.PUBLISH == 'true'
+              env:
+                  AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+              run: |
+                  set -euo pipefail
+                  [[ -n "$AUR_SSH_PRIVATE_KEY" ]] || { echo "Repository secret AUR_SSH_PRIVATE_KEY is not set." >&2; exit 1; }
+                  mkdir -p ~/.ssh
+                  if grep -q "BEGIN .*PRIVATE KEY" <<<"$AUR_SSH_PRIVATE_KEY"; then
+                      printf '%s\n' "$AUR_SSH_PRIVATE_KEY" | tr -d '\r' >~/.ssh/aur
+                  else
+                      printf '%s' "$AUR_SSH_PRIVATE_KEY" | tr -d '\r\n' | base64 -d >~/.ssh/aur
+                  fi
+                  chmod 600 ~/.ssh/aur
+                  ssh-keygen -y -f ~/.ssh/aur >/dev/null || { echo "AUR_SSH_PRIVATE_KEY is not a valid private key." >&2; exit 1; }
+                  ssh-keyscan -t ed25519,rsa aur.archlinux.org >>~/.ssh/known_hosts
+                  printf 'Host aur.archlinux.org\n  User aur\n  IdentityFile ~/.ssh/aur\n  IdentitiesOnly yes\n  StrictHostKeyChecking yes\n' >~/.ssh/config
+
+            - name: Push to the AUR
+              if: env.PUBLISH == 'true'
+              run: |
+                  set -euo pipefail
+                  git clone ssh://aur@aur.archlinux.org/arch-sense.git /tmp/aur-repo
+                  cd /tmp/aur-repo
+                  # Replace the tracked package files with the payload (the AUR repo is flat).
+                  git ls-files -z | xargs -0 -r rm -f
+                  cp /tmp/aur-payload/. . -r
+                  git add -A
+                  if git diff --cached --quiet; then
+                      echo "AUR already up to date; nothing to push."
+                      exit 0
+                  fi
+                  pkgver=$(sed -n 's/^pkgver=//p' PKGBUILD)
+                  git -c user.name="CPT_Dawn" -c user.email="dev@cptdawn.dev" \
+                      commit -m "arch-sense: update to ${pkgver}"
+                  git push origin HEAD:master
+
+            - name: Record the bumped PKGBUILD in the repository
+              if: env.PUBLISH == 'true'
+              env:
+                  DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+              run: |
+                  set -euo pipefail
+                  git config --global --add safe.directory "$PWD"
+                  git fetch origin "$DEFAULT_BRANCH"
+                  git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
+                  cp /tmp/aur-payload/PKGBUILD packaging/aur/arch-sense/PKGBUILD
+                  git add packaging/aur/arch-sense/PKGBUILD
+                  if git diff --cached --quiet; then
+                      echo "Checked-in PKGBUILD already matches."
+                      exit 0
+                  fi
+                  git -c user.name="CPT_Dawn" -c user.email="dev@cptdawn.dev" \
+                      commit -m "chore(aur): bump arch-sense PKGBUILD to ${TAG#v}"
+                  git push origin "HEAD:$DEFAULT_BRANCH"

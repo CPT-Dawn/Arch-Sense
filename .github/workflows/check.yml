@@ -1,0 +1,56 @@
+name: Check
+
+# Every push and pull request: Rust lints and tests, then both AUR packages built
+# in a clean Arch container. Any failure fails the run.
+
+on:
+    push:
+    pull_request:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: check-${{ github.ref }}
+    cancel-in-progress: true
+
+env:
+    CARGO_TERM_COLOR: always
+
+jobs:
+    rust:
+        name: fmt, clippy, test
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - name: Install system libraries
+              run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev pkg-config
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                  components: rustfmt, clippy
+            - uses: Swatinem/rust-cache@v2
+            - run: cargo fmt --check
+            - run: cargo clippy --all-targets --locked -- -D warnings
+            - run: cargo test --locked
+
+    packaging:
+        name: makepkg (Arch container)
+        runs-on: ubuntu-latest
+        container: archlinux:base-devel
+        steps:
+            - name: Install tooling
+              run: |
+                  pacman -Syu --noconfirm --needed git cargo namcap dkms libusb systemd
+                  # makepkg refuses to run as root.
+                  useradd -m builder
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+            - name: Hand the checkout to the build user
+              run: |
+                  chown -R builder:builder .
+                  runuser -u builder -- git config --global --add safe.directory "$PWD"
+            - name: Script tests (version and checksum bump)
+              run: runuser -u builder -- env HOME=/home/builder .github/scripts/test_bump_pkgbuild.sh
+            - name: Package checks, both packages (build, test, namcap)
+              run: runuser -u builder -- env HOME=/home/builder packaging/check.sh --build
