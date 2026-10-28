@@ -6,6 +6,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::App;
 use crate::capabilities::{SenseInterface, Turbo};
 use crate::keyboard::UsbAccess;
+use crate::lighting::{Detection, LightingBackend};
 use crate::theme::Theme;
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
@@ -16,7 +17,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
     match &app.settings.laptop {
         Some(laptop) => {
             details.push(sense_interface(laptop.sense_interface).to_string());
-            details.push(lighting_backend(&app.keyboard).to_string());
+            details.push(lighting_backend(app.detection, &app.keyboard));
         }
         None => details.push("Scanning hardware…".to_string()),
     }
@@ -49,11 +50,17 @@ fn sense_interface(interface: SenseInterface) -> &'static str {
     }
 }
 
-fn lighting_backend(keyboard: &UsbAccess) -> &'static str {
-    match keyboard {
-        UsbAccess::Accessible => "USB HID keyboard",
-        UsbAccess::PermissionDenied => "USB HID keyboard (no access)",
-        UsbAccess::Error(_) => "USB HID keyboard (unreachable)",
-        UsbAccess::NotFound => "No keyboard lighting",
+fn lighting_backend(detection: Detection, keyboard: &UsbAccess) -> String {
+    match detection {
+        Detection::Backend(backend) => {
+            let access = match (backend, keyboard) {
+                (LightingBackend::UsbHid, UsbAccess::PermissionDenied) => " (no access)",
+                (LightingBackend::UsbHid, UsbAccess::Error(_)) => " (unreachable)",
+                _ => "",
+            };
+            format!("{} keyboard{access}", backend.name())
+        }
+        Detection::Unsupported(_) => "Keyboard not supported".to_string(),
+        Detection::None => "No keyboard lighting".to_string(),
     }
 }

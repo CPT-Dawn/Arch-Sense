@@ -176,6 +176,7 @@ fn an_unsupported_keyboard_is_a_warning_with_a_way_to_help() {
     assert_eq!(problem.status, Status::Warn);
     assert!(problem.detail.contains("05af:666a"), "{report}");
     assert!(remedy(problem).contains("issues"));
+    assert!(remedy(problem).contains("Arch-Sense#contributing"));
     assert_eq!(report.exit_code(), 0);
 }
 
@@ -189,6 +190,13 @@ fn a_four_zone_keyboard_is_detected() {
     let lighting = check(&report, "Lighting Backend");
     assert_eq!(lighting.status, Status::Ok);
     assert_eq!(lighting.detail, "Four-Zone");
+}
+
+#[test]
+fn the_doctor_agrees_with_the_app_that_four_zone_beats_usb_hid() {
+    let report = diagnose(healthy().four_zoned_kb(), Membership::Member);
+
+    assert_eq!(check(&report, "Lighting Backend").detail, "Four-Zone");
 }
 
 #[test]
