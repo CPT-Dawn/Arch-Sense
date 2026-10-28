@@ -326,3 +326,42 @@ fn the_preview_follows_changes_before_the_keyboard_does() {
     assert!(dimmed.iter().all(|&c| c != red), "dimmed to 30%");
     assert!(lit.keyboard.sent().is_empty());
 }
+
+#[test]
+fn clicking_a_swatch_sets_that_colour() {
+    let mut lit = start(None); // White
+    let (x, y) = lit.app.find_in_row("Colour", "█").expect("first swatch");
+
+    lit.app.click(x, y);
+
+    assert!(lit.app.row("Colour").unwrap().contains("Red"));
+    assert_eq!(lit.app.selected_setting().as_deref(), Some("Colour"));
+    lit.app.advance(SETTLED);
+    lit.wait_for_footer("✓ Colour → Red · saved");
+}
+
+#[test]
+fn clicking_custom_opens_the_hex_input() {
+    let mut lit = start(None);
+    let (x, y) = lit.app.find_in_row("Colour", "# custom").expect("custom");
+
+    lit.app.click(x, y);
+
+    assert!(lit.app.screen().contains("Custom colour"));
+}
+
+#[test]
+fn clicking_an_effect_or_direction_picks_it() {
+    let mut lit = start(None); // Static
+    let (x, y) = lit
+        .app
+        .find_in_row("Effect", "Breathing")
+        .expect("Breathing");
+    lit.app.click(x, y);
+    assert_eq!(lit.app.highlighted("Effect").as_deref(), Some("Breathing"));
+
+    lit.app.press(KeyCode::Right); // → Wave
+    let (x, y) = lit.app.find_in_row("Direction", "Down").expect("Down");
+    lit.app.click(x, y);
+    assert_eq!(lit.app.highlighted("Direction").as_deref(), Some("Down"));
+}

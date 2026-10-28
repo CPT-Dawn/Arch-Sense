@@ -25,6 +25,8 @@ use tempfile::TempDir;
 use crate::keyboard::{USB_HID_PRODUCT_ID, USB_HID_VENDOR_ID};
 use crate::machine::MachineRoot;
 
+mod doctor;
+
 /// Every attribute a Predator (PH16-71) or Nitro v4 Sense Interface exposes.
 const FULL_ATTRS: [(&str, &str); 7] = [
     ("backlight_timeout", "0"),
@@ -141,17 +143,7 @@ impl FakeMachineBuilder {
 
     /// hwmon chips for CPU and GPU temperature and two fans.
     pub fn sensors(self) -> Self {
-        self.hwmon(
-            0,
-            "coretemp",
-            &[("temp1_input", "52000"), ("temp1_label", "Package id 0")],
-        )
-        .hwmon(
-            1,
-            "amdgpu",
-            &[("temp1_input", "47000"), ("temp1_label", "edge")],
-        )
-        .hwmon(
+        self.intel_cpu(52).amd_gpu(47).hwmon(
             2,
             "acer",
             &[
@@ -161,6 +153,89 @@ impl FakeMachineBuilder {
                 ("fan2_label", "gpu_fan"),
             ],
         )
+    }
+
+    /// An Intel CPU (`coretemp`) at `celsius`, with an NVMe drive as a decoy.
+    pub fn intel_cpu(self, celsius: u32) -> Self {
+        self.hwmon(
+            0,
+            "coretemp",
+            &[
+                ("temp1_input", &millidegrees(celsius)),
+                ("temp1_label", "Package id 0"),
+            ],
+        )
+        .hwmon(
+            5,
+            "nvme",
+            &[("temp1_input", "33000"), ("temp1_label", "Composite")],
+        )
+    }
+
+    /// An AMD CPU (`k10temp`) at `celsius`.
+    pub fn amd_cpu(self, celsius: u32) -> Self {
+        self.hwmon(
+            0,
+            "k10temp",
+            &[
+                ("temp1_input", &millidegrees(celsius)),
+                ("temp1_label", "Tctl"),
+            ],
+        )
+    }
+
+    /// An AMD GPU (`amdgpu`) at `celsius`.
+    pub fn amd_gpu(self, celsius: u32) -> Self {
+        self.hwmon(
+            1,
+            "amdgpu",
+            &[
+                ("temp1_input", &millidegrees(celsius)),
+                ("temp1_label", "edge"),
+            ],
+        )
+    }
+
+    /// An NVIDIA GPU whose open driver (`nouveau`) exposes hwmon, at `celsius`.
+    pub fn nvidia_hwmon_gpu(self, celsius: u32) -> Self {
+        self.hwmon(1, "nouveau", &[("temp1_input", &millidegrees(celsius))])
+    }
+
+    /// An `nvidia-smi` that reports `celsius`: the proprietary driver, which has no hwmon sensor.
+    pub fn nvidia_smi(self, celsius: u32) -> Self {
+        self.executable(
+            MachineRoot::nvidia_smi,
+            format!("#!/bin/sh\necho {celsius}\n"),
+        )
+    }
+
+    /// Linuwu-Sense's own unlabelled `acer` chip: temp1 is the CPU, temp2 the GPU,
+    /// fan1 the CPU fan and fan2 the GPU fan.
+    pub fn acer_sensors(self, cpu: u32, gpu: u32, cpu_fan: u32, gpu_fan: u32) -> Self {
+        self.hwmon(
+            2,
+            "acer",
+            &[
+                ("temp1_input", &millidegrees(cpu)),
+                ("temp2_input", &millidegrees(gpu)),
+                ("fan1_input", &cpu_fan.to_string()),
+                ("fan2_input", &gpu_fan.to_string()),
+            ],
+        )
+    }
+
+    /// A battery (`BAT1`) at `percent` charge in `status` (`Charging`,
+    /// `Discharging`, `Full`, `Not charging`) drawing `microwatts`, beside a mains adapter.
+    pub fn battery(self, percent: u8, status: &str, microwatts: u64) -> Self {
+        let supply = |name: &'static str| {
+            move |m: &MachineRoot, file: &str| m.power_supply_dir().join(name).join(file)
+        };
+        let (bat, ac) = (supply("BAT1"), supply("AC"));
+        self.file(move |m| bat(m, "type"), "Battery")
+            .file(move |m| bat(m, "capacity"), percent.to_string())
+            .file(move |m| bat(m, "status"), status)
+            .file(move |m| bat(m, "power_now"), microwatts.to_string())
+            .file(move |m| ac(m, "type"), "Mains")
     }
 
     /// The PH16-71-family USB HID keyboard (`04f2:0117`), openable by the current user.
@@ -243,6 +318,25 @@ impl FakeMachineBuilder {
         self
     }
 
+    /// Like [`file`](Self::file), but marked executable.
+    fn executable(
+        mut self,
+        path: impl FnOnce(&MachineRoot) -> PathBuf + 'static,
+        contents: impl Into<String>,
+    ) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let contents = contents.into();
+        self.steps.push(Box::new(move |machine| {
+            let path = path(machine);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&path, contents)?;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+        }));
+        self
+    }
+
     fn file(
         mut self,
         path: impl FnOnce(&MachineRoot) -> PathBuf + 'static,
@@ -261,4 +355,8 @@ impl FakeMachineBuilder {
         }));
         self
     }
+}
+
+fn millidegrees(celsius: u32) -> String {
+    (celsius * 1000).to_string()
 }

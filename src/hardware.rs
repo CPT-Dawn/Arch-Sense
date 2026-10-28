@@ -13,7 +13,7 @@ use crate::constants::setup_hint;
 use crate::keyboard::{KeyboardTransport, UsbAccess, keyboard_access};
 use crate::lighting::{self, Lighting, LightingBackend, saved};
 use crate::machine::MachineRoot;
-use crate::models::{FanMode, SensorMetric, SensorSnapshot};
+use crate::models::{Battery, BatteryState, FanMode, SensorMetric, SensorSnapshot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SensorRole {
@@ -24,6 +24,7 @@ enum SensorRole {
 #[derive(Clone, Debug)]
 struct HwmonFanSample {
     hwmon_name: String,
+    index: usize,
     label: Option<String>,
     rpm: u64,
     pwm: Option<u64>,
@@ -33,6 +34,7 @@ struct HwmonFanSample {
 #[derive(Clone, Debug)]
 struct HwmonTempSample {
     hwmon_name: String,
+    index: usize,
     label: Option<String>,
     celsius: f64,
 }
@@ -218,7 +220,39 @@ fn read_sensors(m: &MachineRoot, laptop: &Laptop) -> SensorSnapshot {
         gpu_fan,
         cpu_fan_mode,
         gpu_fan_mode,
+        battery: read_battery(m),
     }
+}
+
+/// The first battery in the power-supply class, if the laptop has one that reads.
+fn read_battery(m: &MachineRoot) -> Option<Battery> {
+    let mut dirs: Vec<PathBuf> = fs::read_dir(m.power_supply_dir())
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|dir| read_optional_string(&dir.join("type")).as_deref() == Some("Battery"))
+        .collect();
+    dirs.sort();
+    let dir = dirs.into_iter().next()?;
+
+    let percent = read_optional_u64(&dir.join("capacity"))?.min(100) as u8;
+    let state = match read_optional_string(&dir.join("status")).as_deref() {
+        Some("Charging") => BatteryState::Charging,
+        Some("Discharging") => BatteryState::Discharging,
+        Some("Full") => BatteryState::Full,
+        Some("Not charging") => BatteryState::NotCharging,
+        _ => BatteryState::Unknown,
+    };
+    let micro = |name: &str| read_optional_u64(&dir.join(name)).map(|value| value as f64);
+    let watts = micro("power_now")
+        .or_else(|| Some(micro("current_now")? * micro("voltage_now")? / 1e6))
+        .map(|microwatts| microwatts / 1e6);
+
+    Some(Battery {
+        percent,
+        state,
+        watts,
+    })
 }
 
 fn read_cpu_temp(m: &MachineRoot) -> SensorMetric {
@@ -256,7 +290,7 @@ fn read_gpu_temp(m: &MachineRoot) -> SensorMetric {
 
     let hwmon_error = hwmon.err().map(|error| error.to_string());
 
-    match read_gpu_temp_from_nvidia_smi() {
+    match read_gpu_temp_from_nvidia_smi(m) {
         Ok(value) => SensorMetric::available(value),
         Err(error) => {
             let detail = match hwmon_error {
@@ -268,8 +302,8 @@ fn read_gpu_temp(m: &MachineRoot) -> SensorMetric {
     }
 }
 
-fn read_gpu_temp_from_nvidia_smi() -> Result<f64> {
-    match Command::new("nvidia-smi")
+fn read_gpu_temp_from_nvidia_smi(m: &MachineRoot) -> Result<f64> {
+    match Command::new(m.nvidia_smi())
         .args([
             "--query-gpu=temperature.gpu",
             "--format=csv,noheader,nounits",
@@ -277,7 +311,9 @@ fn read_gpu_temp_from_nvidia_smi() -> Result<f64> {
         .output()
     {
         Ok(output) if output.status.success() => {
-            let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // One line per GPU; the first is the one the card shows.
+            let raw = stdout.lines().next().unwrap_or_default().trim().to_string();
             raw.parse::<f64>()
                 .with_context(|| format!("parsing GPU temperature from nvidia-smi output '{raw}'"))
         }
@@ -409,7 +445,7 @@ fn best_fan_index(
 fn fan_score(sample: &HwmonFanSample, role: SensorRole) -> i32 {
     let label = sample.label.as_deref().unwrap_or("");
     let haystack = format!("{} {label}", sample.hwmon_name).to_ascii_lowercase();
-    let mut score = 0;
+    let mut score = acer_channel_score(&sample.hwmon_name, sample.index, role);
 
     if contains_any(&haystack, role_keywords(role)) {
         score += 6;
@@ -478,6 +514,7 @@ fn collect_hwmon_fan_samples(m: &MachineRoot) -> Result<Vec<HwmonFanSample>> {
 
             samples.push(HwmonFanSample {
                 hwmon_name: hwmon_name.clone(),
+                index,
                 label,
                 rpm,
                 pwm,
@@ -544,6 +581,7 @@ fn collect_hwmon_temp_samples(m: &MachineRoot) -> Result<Vec<HwmonTempSample>> {
             let label = read_optional_string(&hwmon_dir.join(format!("temp{index}_label")));
             samples.push(HwmonTempSample {
                 hwmon_name: hwmon_name.clone(),
+                index,
                 label,
                 celsius,
             });
@@ -557,14 +595,16 @@ fn best_temp_index(samples: &[HwmonTempSample], role: SensorRole) -> Option<usiz
     samples
         .iter()
         .enumerate()
-        .max_by_key(|(_, sample)| temperature_score(sample, role))
+        .map(|(index, sample)| (index, temperature_score(sample, role)))
+        .filter(|&(_, score)| score > 0)
+        .max_by_key(|&(_, score)| score)
         .map(|(index, _)| index)
 }
 
 fn temperature_score(sample: &HwmonTempSample, role: SensorRole) -> i32 {
     let label = sample.label.as_deref().unwrap_or("");
     let haystack = format!("{} {label}", sample.hwmon_name).to_ascii_lowercase();
-    let mut score = 0;
+    let mut score = acer_channel_score(&sample.hwmon_name, sample.index, role);
 
     if contains_any(&haystack, role_keywords(role)) {
         score += 6;
@@ -590,6 +630,21 @@ fn temperature_score(sample: &HwmonTempSample, role: SensorRole) -> i32 {
     }
 
     score
+}
+
+/// Linuwu-Sense's `acer` hwmon chip has no labels: channel 1 is the CPU and
+/// channel 2 the GPU, for temperatures and fans alike. The bonus stays below a
+/// keyword match, so a labelled `coretemp` or `amdgpu` still wins.
+fn acer_channel_score(hwmon_name: &str, index: usize, role: SensorRole) -> i32 {
+    let channel = match role {
+        SensorRole::Cpu => 1,
+        SensorRole::Gpu => 2,
+    };
+    if hwmon_name == "acer" && index == channel {
+        5
+    } else {
+        0
+    }
 }
 
 fn role_keywords(role: SensorRole) -> &'static [&'static str] {

@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -12,4 +12,13 @@ pub struct Cli {
     /// Apply saved RGB settings without launching the TUI
     #[arg(long)]
     pub apply: bool,
+
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+#[derive(Subcommand, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    /// Explain what isn't working and how to fix it; exits non-zero on errors
+    Doctor,
 }
