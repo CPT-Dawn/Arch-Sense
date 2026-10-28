@@ -3,6 +3,7 @@ pub mod capabilities;
 pub mod cli;
 pub mod commands;
 pub mod constants;
+pub mod demo;
 pub mod doctor;
 pub mod fixture;
 pub mod hardware;

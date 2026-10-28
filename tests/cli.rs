@@ -24,6 +24,12 @@ fn boot_restore_keeps_its_flag() {
 }
 
 #[test]
+fn demo_is_a_flag_and_excludes_boot_restore() {
+    assert!(Cli::try_parse_from(["arch-sense", "--demo"]).is_ok());
+    assert!(Cli::try_parse_from(["arch-sense", "--demo", "--apply"]).is_err());
+}
+
+#[test]
 fn doctor_is_a_subcommand() {
     let cli = Cli::try_parse_from(["arch-sense", "doctor"]).expect("doctor parses");
     assert_eq!(cli.command, Some(Command::Doctor));
