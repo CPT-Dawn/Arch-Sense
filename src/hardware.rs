@@ -10,13 +10,13 @@ use anyhow::{Context, Result, bail};
 
 use crate::capabilities::{Capability, Laptop, detect};
 use crate::config::AppConfig;
+use crate::constants::setup_hint;
 use crate::constants::{BRIGHT_HW_MAX, PREAMBLE, SPEED_HW_FAST, SPEED_HW_SLOW};
 use crate::keyboard::{KeyboardTransport, Packet, UsbAccess, keyboard_access};
 use crate::machine::MachineRoot;
 use crate::models::{
     FanMode, OFF_EFFECT_INDEX, RANDOM_COLOR_INDEX, Rgb, RgbSettings, SensorMetric, SensorSnapshot,
 };
-use crate::permissions::setup_hint;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SensorRole {

@@ -5,23 +5,6 @@ use crate::hardware;
 use crate::keyboard::{KeyboardTransport, UsbAccess, keyboard_access};
 use crate::machine::MachineRoot;
 use crate::models::RgbSettings;
-use crate::permissions;
-
-pub fn print_permission_report(machine: &MachineRoot) -> Result<()> {
-    permissions::print_permission_report(machine)
-}
-
-pub fn install_permissions(machine: &MachineRoot) -> Result<()> {
-    permissions::install_permissions(machine)
-}
-
-pub fn install_permissions_as_root(machine: &MachineRoot) -> Result<()> {
-    permissions::install_permissions_as_root(machine)
-}
-
-pub fn apply_permissions(machine: &MachineRoot) -> Result<()> {
-    permissions::apply_permissions_as_root(machine)
-}
 
 pub fn apply_saved_config(
     machine: &MachineRoot,
