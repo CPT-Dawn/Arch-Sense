@@ -51,6 +51,8 @@ pub(crate) enum SettingId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum LightingField {
     Effect,
+    /// Which zone the Colour row paints: All, or one of a multi-zone keyboard's.
+    Zone,
     Colour,
     Brightness,
     Speed,
@@ -58,7 +60,7 @@ pub(crate) enum LightingField {
 }
 
 /// Every setting, in list order.
-const ORDER: [SettingId; 13] = [
+const ORDER: [SettingId; 14] = [
     SettingId::Hardware(Capability::ThermalProfile),
     SettingId::Hardware(Capability::Fans),
     SettingId::Hardware(Capability::ChargeLimit),
@@ -68,6 +70,7 @@ const ORDER: [SettingId; 13] = [
     SettingId::Hardware(Capability::LcdOverdrive),
     SettingId::Hardware(Capability::BacklightTimeout),
     SettingId::Lighting(LightingField::Effect),
+    SettingId::Lighting(LightingField::Zone),
     SettingId::Lighting(LightingField::Colour),
     SettingId::Lighting(LightingField::Brightness),
     SettingId::Lighting(LightingField::Speed),
@@ -100,6 +103,7 @@ impl SettingId {
             },
             Self::Lighting(field) => match field {
                 LightingField::Effect => "Effect",
+                LightingField::Zone => "Zone",
                 LightingField::Colour => "Colour",
                 LightingField::Brightness => "Brightness",
                 LightingField::Speed => "Speed",
@@ -123,6 +127,7 @@ impl SettingId {
             },
             Self::Lighting(field) => match field {
                 LightingField::Effect => "Rendered by the keyboard itself",
+                LightingField::Zone => "Colour one zone, or all at once",
                 LightingField::Colour => "←→ palette · ⏎ or # custom hex",
                 LightingField::Brightness | LightingField::Speed | LightingField::Direction => "",
             },
@@ -189,6 +194,8 @@ pub(crate) enum Change {
     },
     /// Preview this lighting on the keyboard (once input settles) and save it.
     Lighting(Lighting),
+    /// Pick which zone the Colour row paints (0 = All, 1.. = a zone). Touches no hardware.
+    Zone(usize),
     /// Ask for a custom hex colour.
     CustomColour,
     /// Ask before starting battery calibration.
@@ -206,6 +213,9 @@ pub(crate) struct SettingsModel {
     pub(crate) lighting: Option<Lighting>,
     /// The last failure per setting.
     pub(crate) errors: HashMap<SettingId, String>,
+    /// The zone the Colour row paints: 0 for All, otherwise 1-based. UI state,
+    /// not part of the [`Lighting`].
+    pub(crate) zone: usize,
 }
 
 impl SettingsModel {
@@ -231,7 +241,9 @@ impl SettingsModel {
                 let raw = self.values.get(&capability).map_or("", String::as_str);
                 Some(hardware_control(capability, raw, laptop))
             }
-            SettingId::Lighting(field) => lighting_control(field, self.lighting.as_ref()?),
+            SettingId::Lighting(field) => {
+                lighting_control(field, self.lighting.as_ref()?, self.zone)
+            }
         }
     }
 
@@ -256,17 +268,33 @@ impl SettingsModel {
             }
             SettingId::Lighting(field) => {
                 let control = self.control(id)?;
-                let lighting = adjust_lighting(self.lighting.as_ref()?, field, &control, step)?;
-                Some(Change::Lighting(lighting))
+                if let (LightingField::Zone, Control::Choice { options, current }) =
+                    (field, &control)
+                {
+                    return Some(Change::Zone(step_index(*current, options.len(), step)?));
+                }
+                let lighting = self.lighting.as_ref()?;
+                let zone = self.painted_zone(lighting);
+                Some(Change::Lighting(adjust_lighting(
+                    lighting, field, &control, step, zone,
+                )?))
             }
         }
     }
 
-    /// The change a custom colour asks for: every zone takes `rgb`.
+    /// The change a custom colour asks for: the selected zone, or every zone, takes `rgb`.
     pub(crate) fn custom_colour(&self, rgb: Rgb) -> Option<Change> {
-        let mut lighting = self.lighting.clone()?;
-        lighting.colours.fill(Colour::Rgb(rgb));
-        Some(Change::Lighting(lighting))
+        let lighting = self.lighting.as_ref()?;
+        let mut next = lighting.clone();
+        paint(&mut next, self.painted_zone(lighting), Colour::Rgb(rgb));
+        Some(Change::Lighting(next))
+    }
+
+    /// The zone (0-based) a colour change paints, or `None` for every zone: only
+    /// an effect that colours zones separately honours the Zone selection.
+    fn painted_zone(&self, lighting: &Lighting) -> Option<usize> {
+        let zone = self.zone.checked_sub(1)?;
+        (lighting.effect.uses.zones && zone < lighting.colours.len()).then_some(zone)
     }
 
     /// The change a click on option `index` of `id` asks for: set that option
@@ -290,13 +318,20 @@ impl SettingsModel {
                 let mut next = lighting.clone();
                 match (field, self.control(id)?) {
                     (LightingField::Effect, _) => next.effect = backend.effects().get(index)?,
+                    (LightingField::Zone, Control::Choice { options, .. }) => {
+                        return (index < options.len()).then_some(Change::Zone(index));
+                    }
                     (LightingField::Direction, _) => {
                         next.direction = backend.directions().get(index)?;
                     }
                     // The option just past the swatches is "# custom".
                     (LightingField::Colour, Control::Swatches { colours, .. }) => {
                         match colours.get(index) {
-                            Some(&swatch) => next.colours.fill(swatch_colour(swatch)),
+                            Some(&swatch) => paint(
+                                &mut next,
+                                self.painted_zone(lighting),
+                                swatch_colour(swatch),
+                            ),
                             None if index == colours.len() => return Some(Change::CustomColour),
                             None => return None,
                         }
@@ -328,6 +363,7 @@ impl SettingsModel {
                 self.values.insert(*capability, value.clone());
             }
             Change::Lighting(lighting) => self.lighting = Some(lighting.clone()),
+            Change::Zone(zone) => self.zone = *zone,
             Change::CustomColour | Change::ConfirmCalibration => {}
         }
     }
@@ -419,7 +455,7 @@ fn thermal_label(profile: &str) -> String {
 }
 
 /// A lighting row's control, or `None` when the current effect doesn't use it.
-fn lighting_control(field: LightingField, lighting: &Lighting) -> Option<Control> {
+fn lighting_control(field: LightingField, lighting: &Lighting, zone: usize) -> Option<Control> {
     let backend = lighting.backend;
     let uses = lighting.effect.uses;
     match field {
@@ -431,15 +467,32 @@ fn lighting_control(field: LightingField, lighting: &Lighting) -> Option<Control
                 .collect(),
             current: backend.effects().iter().position(|e| e == lighting.effect),
         }),
+        LightingField::Zone if uses.colour && uses.zones && backend.zones() > 1 => {
+            let options = ["All".to_string()]
+                .into_iter()
+                .chain((1..=backend.zones()).map(|zone| zone.to_string()))
+                .collect();
+            Some(Control::Choice {
+                options,
+                current: Some(zone.min(backend.zones())),
+            })
+        }
         LightingField::Colour if uses.colour => {
             let colours = swatches(backend);
-            let colour = lighting.colour();
+            let selected = zone.checked_sub(1).filter(|_| uses.zones);
+            let shown = match selected {
+                Some(zone) => lighting.colours.get(zone).copied(),
+                None if uses.zones && !all_alike(&lighting.colours) => None,
+                None => Some(lighting.colour()),
+            };
             Some(Control::Swatches {
-                current: colours
-                    .iter()
-                    .position(|&swatch| swatch_colour(swatch) == colour),
+                current: shown.and_then(|colour| {
+                    colours
+                        .iter()
+                        .position(|&swatch| swatch_colour(swatch) == colour)
+                }),
                 colours,
-                name: colour.name(),
+                name: shown.map_or_else(|| "Mixed".to_string(), Colour::name),
             })
         }
         LightingField::Brightness if uses.brightness => Some(Control::Slider(lighting.brightness)),
@@ -472,6 +525,7 @@ fn adjust_lighting(
     field: LightingField,
     control: &Control,
     step: i8,
+    zone: Option<usize>,
 ) -> Option<Lighting> {
     let mut next = lighting.clone();
     let backend = lighting.backend;
@@ -490,13 +544,25 @@ fn adjust_lighting(
             },
         ) => {
             let swatch = colours[step_index(*current, colours.len(), step)?];
-            next.colours.fill(swatch_colour(swatch));
+            paint(&mut next, zone, swatch_colour(swatch));
         }
         (LightingField::Brightness, _) => next.brightness = percent(lighting.brightness),
         (LightingField::Speed, _) => next.speed = percent(lighting.speed),
         _ => return None,
     }
     Some(next)
+}
+
+/// Gives `zone` (0-based), or every zone when `None`, `colour`.
+fn paint(lighting: &mut Lighting, zone: Option<usize>, colour: Colour) {
+    match zone.and_then(|zone| lighting.colours.get_mut(zone)) {
+        Some(slot) => *slot = colour,
+        None => lighting.colours.fill(colour),
+    }
+}
+
+fn all_alike(colours: &[Colour]) -> bool {
+    colours.windows(2).all(|pair| pair[0] == pair[1])
 }
 
 /// The index `step` away from `current` in a list of `len`, wrapping around.

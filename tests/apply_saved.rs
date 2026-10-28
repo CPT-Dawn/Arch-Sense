@@ -44,3 +44,36 @@ fn apply_without_a_keyboard_quietly_does_nothing() {
 
     assert!(keyboard.sent().is_empty());
 }
+
+#[test]
+fn apply_restores_per_zone_colours_on_a_four_zone_keyboard() {
+    use arch_sense::lighting::{Colour, LightingBackend, Rgb, saved};
+
+    let fake = FakeMachine::builder()
+        .predator_sense()
+        .four_zoned_kb()
+        .build()
+        .expect("fake machine");
+    let backend = LightingBackend::FourZone;
+    let lighting = arch_sense::lighting::Lighting {
+        colours: vec![
+            Colour::Rgb(Rgb::new(255, 0, 0)),
+            Colour::Rgb(Rgb::new(0, 255, 0)),
+            Colour::Rgb(Rgb::new(0, 0, 255)),
+            Colour::Rgb(Rgb::WHITE),
+        ],
+        brightness: 60,
+        ..backend.default_lighting()
+    };
+    saved::save(&fake.machine(), &lighting).unwrap();
+    let mut keyboard = RecordingTransport::default();
+
+    apply_saved_config(&fake.machine(), &mut keyboard).expect("apply succeeds");
+
+    let per_zone = fake.machine().four_zone_kb_dir().join("per_zone_mode");
+    assert_eq!(
+        fs::read_to_string(per_zone).unwrap(),
+        "ff0000,00ff00,0000ff,ffffff,60\n"
+    );
+    assert!(keyboard.sent().is_empty());
+}

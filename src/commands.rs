@@ -18,7 +18,7 @@ pub fn apply_saved_config(
         return Ok(());
     };
 
-    match lighting::detect(machine) {
+    match lighting::detect(machine).backend() {
         None => {
             eprintln!("arch-sense: no supported keyboard found, nothing to restore");
             return Ok(());

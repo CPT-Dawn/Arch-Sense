@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use crate::capabilities::{Capability, Laptop, detect};
 use crate::constants::setup_hint;
 use crate::keyboard::{KeyboardTransport, UsbAccess, keyboard_access};
-use crate::lighting::{self, Lighting, LightingBackend, saved};
+use crate::lighting::{self, Detection, Lighting, saved};
 use crate::machine::MachineRoot;
 use crate::models::{Battery, BatteryState, FanMode, SensorMetric, SensorSnapshot};
 
@@ -77,7 +77,7 @@ pub(crate) struct HardwareSnapshot {
     pub(crate) model: Option<String>,
     pub(crate) keyboard: UsbAccess,
     /// The keyboard's Lighting Backend, if it has one Arch-Sense drives.
-    pub(crate) lighting: Option<LightingBackend>,
+    pub(crate) lighting: Detection,
     pub(crate) sensors: SensorSnapshot,
     /// The current raw value of every Capability present.
     pub(crate) values: BTreeMap<Capability, String>,

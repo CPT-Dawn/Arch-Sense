@@ -34,6 +34,7 @@ const fn effect(name: &'static str, code: u8, colour: bool, direction: bool) -> 
             brightness: true,
             speed: true,
             direction,
+            zones: false,
         },
     }
 }
@@ -47,6 +48,7 @@ pub(super) const EFFECTS: [Effect; 14] = [
             brightness: false,
             speed: false,
             direction: false,
+            zones: false,
         },
     },
     Effect {
@@ -57,6 +59,7 @@ pub(super) const EFFECTS: [Effect; 14] = [
             brightness: true,
             speed: false,
             direction: false,
+            zones: false,
         },
     },
     effect("Breathing", 0x02, true, false),
