@@ -19,7 +19,7 @@ use crate::config::AppConfig;
 use crate::hardware::{HardwareEvent, HardwareHandle, HardwareRequest, spawn_worker};
 use crate::keyboard::{KeyboardTransport, UsbAccess};
 use crate::machine::MachineRoot;
-use crate::models::{FanMode, RgbSettings, SensorSnapshot};
+use crate::models::{Battery, FanMode, RgbSettings, SensorSnapshot};
 use crate::settings::{Change, Section, Setting, SettingId, SettingsModel};
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(33);
@@ -62,6 +62,9 @@ pub(crate) enum Hit {
 /// The latest sensor readings and their recent history.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Sensors {
+    /// Whether the first reading has arrived.
+    pub(crate) read: bool,
+    pub(crate) battery: Option<Battery>,
     pub(crate) cpu_temp: Option<f64>,
     pub(crate) gpu_temp: Option<f64>,
     pub(crate) cpu_fan: Option<f64>,
@@ -73,6 +76,8 @@ pub(crate) struct Sensors {
 
 impl Sensors {
     fn update(&mut self, snapshot: &SensorSnapshot) {
+        self.read = true;
+        self.battery = snapshot.battery;
         self.cpu_temp = snapshot.cpu_temp.value;
         self.gpu_temp = snapshot.gpu_temp.value;
         self.cpu_fan = snapshot.cpu_fan.value;
