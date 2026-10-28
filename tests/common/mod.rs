@@ -62,7 +62,11 @@ impl Harness {
     /// Keeps ticking and rendering until `done` holds, so the hardware worker can catch up.
     pub fn wait_until(&mut self, what: &str, mut done: impl FnMut(&mut Self) -> bool) {
         let started = Instant::now();
-        while !done(self) {
+        loop {
+            self.app.tick(POLL_STEP);
+            if done(self) {
+                return;
+            }
             if started.elapsed() > SETTLE_TIMEOUT {
                 panic!(
                     "timed out waiting for {what}; screen was:\n{}",
