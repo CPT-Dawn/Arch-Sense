@@ -175,7 +175,10 @@ fn an_unsupported_keyboard_is_a_warning_with_a_way_to_help() {
     assert_eq!(problem.name, "Lighting Backend");
     assert_eq!(problem.status, Status::Warn);
     assert!(problem.detail.contains("05af:666a"), "{report}");
-    assert!(remedy(problem).contains("issues"));
+    assert!(
+        remedy(problem).contains("https://github.com/CPT-Dawn/Arch-Sense#contributing"),
+        "{report}"
+    );
     assert_eq!(report.exit_code(), 0);
 }
 

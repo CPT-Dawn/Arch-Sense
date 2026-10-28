@@ -30,6 +30,8 @@ const ENE_KB5130_ID: &str = "00000CF2:00005130";
 /// Keyboards known to exist on Linuwu-Sense laptops that no Lighting Backend drives yet.
 const UNSUPPORTED_KEYBOARDS: [(u16, u16, &str); 1] = [(0x05af, 0x666a, "Jing-Mold (PH16-72)")];
 const NEW_ISSUE: &str = "https://github.com/CPT-Dawn/Arch-Sense/issues/new";
+/// The README section on helping support a new keyboard.
+const CONTRIBUTING: &str = "https://github.com/CPT-Dawn/Arch-Sense#contributing";
 const UPSTREAM_ISSUES: &str = "https://github.com/0x7375646F/Linuwu-Sense/issues";
 const ENE_NOTE: &str =
     "https://github.com/0x7375646F/Linuwu-Sense#note-for-2025-models-enek5130-keyboards";
@@ -535,7 +537,7 @@ fn lighting(machine: &MachineRoot) -> Check {
             Status::Warn,
             format!("{name} keyboard {vendor:04x}:{product:04x} isn't supported yet"),
             format!(
-                "Help add it: open an issue at {NEW_ISSUE} with USB captures of the vendor software changing colours"
+                "Help add it with USB captures of the vendor software changing colours: {CONTRIBUTING}"
             ),
         );
     }
