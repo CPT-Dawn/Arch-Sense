@@ -20,15 +20,30 @@ const SPARK_CEILING: u64 = 100;
 enum Body<'a> {
     Sparkline(&'a VecDeque<u64>),
     Gauge(f64),
-    Text(Line<'static>),
+    Text(Text<'static>),
 }
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
     let [cpu, gpu, fans, battery] = Layout::horizontal([Constraint::Fill(1); 4]).areas(area);
     let sensors = &app.sensors;
 
-    temperature_card(frame, cpu, "CPU", sensors.cpu_temp, &sensors.cpu_history);
-    temperature_card(frame, gpu, "GPU", sensors.gpu_temp, &sensors.gpu_history);
+    let read = sensors.read;
+    temperature_card(
+        frame,
+        cpu,
+        "CPU",
+        sensors.cpu_temp,
+        &sensors.cpu_history,
+        read,
+    );
+    temperature_card(
+        frame,
+        gpu,
+        "GPU",
+        sensors.gpu_temp,
+        &sensors.gpu_history,
+        read,
+    );
 
     let mode = app
         .settings
@@ -64,16 +79,45 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
             "On" => "limit 80%",
             _ => "no limit",
         });
+    battery_card(frame, battery, app, limit);
+}
+
+/// Charge, state, watts and the charge limit; "No battery" when there's none.
+fn battery_card(frame: &mut Frame, area: Rect, app: &App, limit: Option<&str>) {
+    let dim = Style::new().fg(Theme::DIM);
+    let Some(battery) = app.sensors.battery else {
+        let body = if app.sensors.read { "No battery" } else { "" };
+        card(
+            frame,
+            area,
+            "Battery",
+            None,
+            Theme::OK,
+            Body::Text(Line::styled(body, dim).into()),
+        );
+        return;
+    };
+
+    let state = match battery.watts {
+        Some(watts) if watts >= 0.05 => format!("{} {watts:.1} W", battery.state.label()),
+        _ => battery.state.label().to_string(),
+    };
+    let lines = vec![
+        Line::styled(state, Style::new().fg(Theme::TEXT)),
+        Line::styled(limit.unwrap_or_default().to_string(), dim),
+    ];
+    let colour = match battery.percent {
+        0..=15 => Theme::ERROR,
+        16..=30 => Theme::WARN,
+        _ => Theme::OK,
+    };
     card(
         frame,
-        battery,
+        area,
         "Battery",
-        None,
-        Theme::OK,
-        Body::Text(Line::from(Span::styled(
-            limit.unwrap_or_default(),
-            Style::new().fg(Theme::DIM),
-        ))),
+        Some(format!("{}%", battery.percent)),
+        colour,
+        Body::Text(Text::from(lines)),
     );
 }
 
@@ -83,10 +127,17 @@ fn temperature_card(
     title: &str,
     celsius: Option<f64>,
     history: &VecDeque<u64>,
+    read: bool,
 ) {
     let colour = celsius.map_or(Theme::DIM, Theme::temperature);
     let value = celsius.map(|celsius| format!("{celsius:.0}°C"));
-    card(frame, area, title, value, colour, Body::Sparkline(history));
+    // Before the first scan the card is just empty; after it, say why.
+    let body = if celsius.is_none() && read {
+        Body::Text(Line::styled("unavailable", Style::new().fg(Theme::DIM)).into())
+    } else {
+        Body::Sparkline(history)
+    };
+    card(frame, area, title, value, colour, body);
 }
 
 fn card(
@@ -147,6 +198,6 @@ fn card(
                 bottom,
             );
         }
-        Body::Text(line) => frame.render_widget(Paragraph::new(line), rest),
+        Body::Text(text) => frame.render_widget(Paragraph::new(text), rest),
     }
 }

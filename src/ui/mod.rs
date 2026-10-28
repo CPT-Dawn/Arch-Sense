@@ -31,6 +31,11 @@ pub(crate) const WIDE: u16 = 110;
 const CARDS_HEIGHT: u16 = 5;
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
+    draw_dashboard(frame, app);
+    app.color_mode.apply(frame.buffer_mut());
+}
+
+fn draw_dashboard(frame: &mut Frame, app: &App) {
     app.hits.borrow_mut().clear();
     let area = frame.area();
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {

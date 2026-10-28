@@ -14,6 +14,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
         Some(Overlay::Doctor { report, scroll }) => {
             super::doctor::draw(frame, area, report, *scroll)
         }
+        Some(Overlay::Help) => help(frame, area),
     }
 }
 
@@ -65,5 +66,39 @@ fn confirm_calibration(frame: &mut Frame, area: Rect) {
             Span::styled(" cancel", Style::new().fg(Theme::SUB)),
         ]),
     ];
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+const BINDINGS: &[(&str, &str)] = &[
+    ("↑ k  ↓ j", "Select the previous or next setting"),
+    ("← h  → l", "Change the selected setting"),
+    ("Enter  Space", "Toggle, run, or step forward"),
+    ("Tab  Shift-Tab", "Jump between sections"),
+    ("?", "Show or hide this help"),
+    ("d", "Open the Doctor"),
+    ("Esc", "Close any dialog"),
+    ("q  Ctrl-C", "Quit"),
+    ("click", "Select a row; click an option to set it"),
+    ("click selected", "Step the selected row forward"),
+    ("right-click", "Step the selected row back"),
+    ("scroll", "Move the selection"),
+];
+
+fn help(frame: &mut Frame, area: Rect) {
+    let height = BINDINGS.len() as u16 + 4;
+    let inner = modal(frame, area, 66, height, "Help");
+    let mut lines: Vec<Line> = BINDINGS
+        .iter()
+        .map(|(keys, what)| {
+            Line::from(vec![
+                Span::styled(format!("{keys:<16}"), Style::new().fg(Theme::ACCENT).bold()),
+                Span::styled(*what, Style::new().fg(Theme::SUB)),
+            ])
+        })
+        .collect();
+    lines.push(Line::from(Span::styled(
+        "Esc to close",
+        Style::new().fg(Theme::DIM),
+    )));
     frame.render_widget(Paragraph::new(lines), inner);
 }

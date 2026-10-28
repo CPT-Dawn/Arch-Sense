@@ -37,6 +37,36 @@ impl FanMode {
     }
 }
 
+/// What the power-supply class says about the battery.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Battery {
+    pub(crate) percent: u8,
+    pub(crate) state: BatteryState,
+    /// Power flowing in or out, when the battery reports it.
+    pub(crate) watts: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BatteryState {
+    Charging,
+    Discharging,
+    Full,
+    NotCharging,
+    Unknown,
+}
+
+impl BatteryState {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Charging => "Charging",
+            Self::Discharging => "On battery",
+            Self::Full => "Full",
+            Self::NotCharging => "Not charging",
+            Self::Unknown => "Unknown",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SensorSnapshot {
     pub(crate) cpu_temp: SensorMetric,
@@ -45,6 +75,8 @@ pub(crate) struct SensorSnapshot {
     pub(crate) gpu_fan: SensorMetric,
     pub(crate) cpu_fan_mode: FanMode,
     pub(crate) gpu_fan_mode: FanMode,
+    /// `None` when the laptop has no battery.
+    pub(crate) battery: Option<Battery>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -292,6 +324,16 @@ impl RgbSettings {
 
     pub(crate) fn color(&self) -> ColorDef {
         COLOR_PALETTE[self.color_idx]
+    }
+
+    /// Jumps a list-valued field straight to option `index`; other fields are left alone.
+    pub(crate) fn set(&mut self, field: RgbField, index: usize) {
+        match field {
+            RgbField::Effect if index < RGB_EFFECTS.len() => self.effect_idx = index,
+            RgbField::Color if index < COLOR_PALETTE.len() => self.color_idx = index,
+            RgbField::Direction if index < DIRECTIONS.len() => self.direction_idx = index,
+            _ => {}
+        }
     }
 
     pub(crate) fn adjust(&mut self, field: RgbField, step: i8) {
