@@ -233,9 +233,17 @@ run. Three things changed:
 - **Boot Restore is opt-in.** v1 switched it on for you; the upgrade switches it off
   again. If you relied on lighting coming back at boot, enable it as
   [shown above](#optional-boot-restore).
-- **The kernel module comes from the AUR.** If you built Linuwu-Sense by hand with
-  `make install`, Arch-Sense still works with it, but you no longer need to maintain it
-  yourself.
+- **The kernel module comes from the AUR.** The package pulls in
+  `linuwu-sense-dkms-git`, which builds the same `linuwu_sense` module. If you built
+  Linuwu-Sense by hand with `make install`, remove that copy first so the two DKMS
+  modules don't fight over it. From your Linuwu-Sense checkout:
+
+  ```bash
+  make uninstall
+  ```
+
+  No checkout any more? `sudo dkms remove linuwu_sense/1.0 --all && sudo rm -rf /usr/src/linuwu_sense-1.0`
+  does the part that matters (check `dkms status` for your version).
 
 ---
 
