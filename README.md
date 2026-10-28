@@ -1,193 +1,279 @@
 <h1 align="center">◆ A R C H - S E N S E ◆</h1>
-<h3 align="center">Acer Predator Control Center — Terminal UI for Arch Linux</h3>
+<h3 align="center">The terminal control center for Acer Predator &amp; Nitro laptops</h3>
 
 <p align="center">
-  A lightweight, zero-overhead Rust TUI for managing Acer Predator laptop hardware —<br>
-  thermal profiles, fan control, battery management, and per-key RGB keyboard lighting —<br>
-  all from a single terminal interface. No PredatorSense. No Windows. No bloat.
+  Thermal profiles, fans, battery care and keyboard lighting for every laptop
+  <a href="https://github.com/0x7375646F/Linuwu-Sense">Linuwu-Sense</a> supports.<br>
+  One package, no sudo, no Windows. PredatorSense, but it fits in a terminal.
 </p>
 
 <p align="center">
-  <img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
-  <img alt="Rust" src="https://img.shields.io/badge/rust-2021_edition-orange?style=flat-square&logo=rust">
-  <img alt="Arch Linux" src="https://img.shields.io/badge/arch-linux-1793d1?style=flat-square&logo=archlinux&logoColor=white">
-  <img alt="Acer Predator" src="https://img.shields.io/badge/acer-predator_PH16--71-39ff14?style=flat-square">
+  <a href="https://aur.archlinux.org/packages/arch-sense"><img alt="AUR" src="https://img.shields.io/aur/version/arch-sense?style=flat-square&logo=archlinux&logoColor=white&color=1793d1"></a>
+  <a href="https://github.com/CPT-Dawn/Arch-Sense/actions/workflows/check.yml"><img alt="Check" src="https://img.shields.io/github/actions/workflow/status/CPT-Dawn/Arch-Sense/check.yml?style=flat-square&label=check"></a>
+  <img alt="Acer Predator & Nitro" src="https://img.shields.io/badge/acer-predator_%26_nitro-39ff14?style=flat-square">
+  <img alt="Rust 2024" src="https://img.shields.io/badge/rust-2024_edition-orange?style=flat-square&logo=rust">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green?style=flat-square"></a>
 </p>
 
----
-<img width="1920" height="1080" alt="arch-sense" src="https://github.com/user-attachments/assets/a437fc34-0c00-40aa-b83e-4bf4d230cdda" />
+<p align="center">
+  <img alt="Arch-Sense running in demo mode" src="docs/demo.gif" width="900">
+</p>
 
-## Overview
+Arch-Sense shows what your laptop is up to (CPU and GPU temperatures, fan speeds,
+battery) and lets you change what it can: Thermal Profile, fans, charge limit, USB
+charging, boot animation, LCD overdrive and keyboard lighting. It only shows the
+controls your laptop actually has, so nothing on screen is a decoy.
 
-**Arch-Sense** is a terminal-based control center that replaces Acer's Windows-only PredatorSense utility on Arch Linux. It communicates directly with the hardware through:
-
-- **sysfs** — via the [`linuwu_sense`](https://github.com/0x7375646F/Linuwu-Sense) kernel module for thermal profiles, fan speeds, battery management, and hardware toggles.
-- **USB HID** — via `libusb` for keyboard RGB lighting control on the Acer Predator PH16-71, ported from the [`ph16-71-rgb`](https://github.com/Order52/ph16-71-rgb) Python project to native Rust.
-
-Built with [`ratatui`](https://github.com/ratatui/ratatui) as a modern single-screen TUI with a dark professional palette, animated gauges, keyboard-first navigation, and a non-blocking hardware worker thread.
-
----
-
-## Features
-
-### ⚙ Controls Panel
-
-| Control | Description |
-|---|---|
-| **Thermal Profile** | Switch between `Quiet`, `Balanced`, `Performance`, and `Low-Power` modes. |
-| **Fan Speed** | Manual override — Auto / Low (30%) / Medium (50%) / High (70%) / Max (100%) for CPU & GPU. |
-| **Battery Limiter** | Cap charging at 80% for battery longevity. |
-| **Battery Calibration** | Trigger a battery calibration cycle (keep AC connected). |
-| **Backlight Timeout** | Auto-disable keyboard RGB after 30s of idle time. |
-| **Boot Animation** | Toggle the Acer Predator boot animation & sound. |
-| **LCD Override** | Reduce display latency and minimize ghosting. |
-| **USB Charging** | Power USB ports while the laptop is off (configurable threshold: 10% / 20% / 30%). |
-
-### ⌨ Keyboard RGB Panel
-
-Full per-keyboard RGB configuration through USB HID protocol (VID: `04F2`, PID: `0117`):
-
-| Parameter | Options |
-|---|---|
-| **Mode** | Off, Static, Breathing, Wave, Snake, Ripple, Rainbow, Rain, Lightning, Spot, Stars, Fireball, Snow, Heartbeat |
-| **Color** | Red, Orange, Gold, Emerald, Cyan, Blue, Violet, Magenta, Pink, White, Random |
-| **Brightness** | 0–100% |
-| **Speed** | 0–100% |
-| **Direction** | Right, Left, Up, Down, Clockwise, Counter-CW (Wave effect only) |
-
-*RGB settings are automatically saved to `/var/lib/arch-sense/config.json` on successful apply and are restored on startup.*
-
-### 📊 Live Sensor Monitoring
-
-- **CPU Temperature** — read directly from `/sys/class/thermal/thermal_zone0/temp`.
-- **GPU Temperature** — queried via `nvidia-smi` (requires proprietary NVIDIA drivers).
-- **CPU & GPU Fan Speeds** — read from the `linuwu_sense` kernel module.
-- Features animated charts with cool, warning, and hot status colors.
+Want a look before installing anything? `arch-sense --demo` runs the whole UI on a
+simulated laptop and touches nothing real. That's what the GIF above is.
 
 ---
 
-## Prerequisites
+## Does my laptop work?
 
-### 1. Install the `linuwu_sense` Kernel Module
+Short answer: **if Linuwu-Sense supports your laptop, Arch-Sense does too.** Arch-Sense
+is a frontend for the [Linuwu-Sense](https://github.com/0x7375646F/Linuwu-Sense) kernel
+module, so check its README for your model first.
 
-Arch-Sense **strictly depends** on the `linuwu_sense` kernel module to expose Acer Predator hardware controls through sysfs.
+Arch-Sense detects your laptop's **Sense Interface** (Predator Sense or Nitro Sense) and
+shows the **Capabilities** it finds there. Controls your firmware exposes but rejects
+are hidden, not shown broken.
 
-**Install `linux-headers` for your running kernel:**
+Keyboard lighting depends on the keyboard, through one of two **Lighting Backends**:
 
-```bash
-sudo pacman -S linux-headers
-```
+| Your keyboard | Lighting Backend | What you get |
+|---|---|---|
+| Four-zone RGB (many Nitro and older Predator models) | **Four-Zone**, via Linuwu-Sense | Static colours per zone (all zones or one at a time), plus Breathing, Neon, Wave, Shifting, Zoom, Meteor and Twinkling |
+| Chicony `04f2:0117` (Predator PH16-71 family) | **USB HID**, talking to the keyboard directly | Static, Breathing, Wave, Snake, Ripple, Rainbow, Rain, Lightning, Spot, Stars, Fireball, Snow and Heartbeat |
+| Jing-Mold `05af:666a` (Predator PH16-72) | Not supported yet | An honest "not yet" in the app, and [a way to help](#contributing) |
+| ENE KB5130 (some 2025+ models) | Four-Zone, in theory | The keyboard accepts the writes and ignores them. A [known limitation](https://github.com/0x7375646F/Linuwu-Sense#note-for-2025-models-enek5130-keyboards) upstream; the Doctor will warn you |
 
-**Build and install the kernel module via DKMS:**
-
-```bash
-git clone https://github.com/0x7375646F/Linuwu-Sense.git
-cd Linuwu-Sense
-make install
-```
-
-> **Note:** `make install` compiles the module and loads it. The module will persist across reboots via DKMS. Ensure you see the `linuwu_sense` directory under `/sys/module/` after installation.
-
-### 2. Install `libusb`
-
-Required for USB HID communication with the keyboard:
-
-```bash
-sudo pacman -S libusb
-```
+Not sure which keyboard you have? Install Arch-Sense and run `arch-sense doctor`; the
+*Lighting Backend* line will tell you.
 
 ---
 
-## Installation (AUR)
+## Install in three steps
 
-The recommended way to install Arch-Sense is via the Arch User Repository (AUR).
+Arch-Sense is on the AUR. It pulls in
+[`linuwu-sense-dkms-git`](https://aur.archlinux.org/packages/linuwu-sense-dkms-git), which
+builds the kernel module for every kernel you have installed.
+
+**1. Install the package** (plus the headers for your kernel, e.g. `linux-headers`, if
+you don't have them yet):
 
 ```bash
 paru -S arch-sense
-# or
-yay -S arch-sense
 ```
 
-### Post-Installation Setup (Crucial)
-
-Arch-Sense is designed to run as a **normal user** without `sudo`. To enable this, you must run the permission setup command once after installation:
+**2. Join the `arch-sense` group**, which is what lets you change settings without sudo:
 
 ```bash
-arch-sense --install-permissions
+sudo usermod -aG arch-sense $USER
 ```
 
-This command uses `pkexec` (Polkit) to:
-1. Create an `arch-sense` system group.
-2. Install a `udev` rule for the Acer keyboard USB device (`04f2:0117`).
-3. Set up a systemd service (`arch-sense-permissions.service`) to re-apply sysfs permissions automatically on boot.
-4. Add your current user to the `arch-sense` group.
+**3. Reboot.** Group changes only reach new logins, and the reboot also swaps the
+in-kernel `acer_wmi` driver for `linuwu_sense`. (If the module was already running,
+logging out and back in is enough.)
 
-**Important:** After running the command, you **must log out and log back in** (or reboot) for the group changes to take effect.
+That's it. Every file belongs to pacman, so there's nothing else to set up and nothing
+left behind when you uninstall.
 
-### Headless Boot Persistence (Systemd)
+### Optional: Boot Restore
 
-When installed via the AUR, the `arch-sense.service` is automatically installed. This service runs `arch-sense --apply` headlessly on boot, reading `/var/lib/arch-sense/config.json` and applying your last saved RGB configuration before you even reach the login screen.
+Keyboards forget their lighting when the power goes. **Boot Restore** reapplies your
+Saved Lighting at every boot, before you log in. It's opt-in:
 
-If you ever need to manually enable it:
 ```bash
-sudo systemctl enable --now arch-sense.service
+sudo systemctl enable arch-sense.service
 ```
+
+It only touches lighting. Linuwu-Sense and the firmware already remember everything else.
 
 ---
 
-## Usage
-
-### Launch the TUI
-
-Simply open your terminal and run:
+## First run
 
 ```bash
 arch-sense
 ```
 
-### Navigation
+Across the top are gauge cards for CPU, GPU, Fans and Battery. Below them is one
+settings list, grouped into **Performance**, **Battery**, **System** and **Lighting**.
+Every value is shown inline, and changes apply the moment you make them: no "apply"
+button, no pending state. The footer confirms each change (or tells you why it didn't
+work).
 
-The TUI utilizes a fully keyboard-driven, context-sensitive footer.
+Your lighting is saved automatically as **Saved Lighting** and restored next time.
 
-- `⇥ Tab` / `Shift+Tab` — Switch focus between the panels (Controls, Keyboard, Sensors).
-- `↑↓` — Navigate lists or select fields.
-- `←→` — Adjust values or choose options.
-- `↵ Enter` — Apply changes or toggle states.
-- `R` — Refresh sensor data (when focused on Sensors).
-- `Q` — Quit the application.
+| Keys | What they do |
+|---|---|
+| `↑` `↓` or `k` `j` | Select the previous or next setting |
+| `←` `→` or `h` `l` | Change the selected setting |
+| `Enter` / `Space` | Toggle, run, or step forward |
+| `Tab` / `Shift-Tab` | Jump between sections |
+| `#` | Type a custom hex colour (on Colour) |
+| `?` | Show or hide the help |
+| `d` | Open the Doctor |
+| `Esc` | Close any dialog |
+| `q` / `Ctrl-C` | Quit |
 
-### Diagnostics & Troubleshooting
+The mouse works too: click a row to select it, click an option or swatch to set it,
+click the selected row to step it forward (right-click steps back), and scroll to move.
 
-To check hardware permissions and system status without launching the UI:
-
-```bash
-arch-sense --doctor
-```
+Arch-Sense needs a terminal of at least 80×24. Smaller than that and it will politely
+ask for more room.
 
 ---
 
-## Expected Errors & Solutions
+## Something's off? Run `arch-sense doctor`
 
-Arch-Sense features a robust status footer (●) that will alert you to hardware and permission issues.
+Before anything else:
 
-| Error Message | Cause & Solution |
-|---|---|
-| `● Kernel Module Missing` | The `linuwu_sense` module is not loaded into the kernel. Ensure you have installed it following the [Prerequisites](#1-install-the-linuwu_sense-kernel-module) section. If you recently updated your kernel, you may need to ensure your DKMS modules rebuilt successfully. |
-| `● USB Permission Denied` | Your user does not have permission to access the raw USB device. Ensure you have run `arch-sense --install-permissions` and **logged out and back in** to apply the new `arch-sense` group. |
-| `● Keyboard Not Found` | Arch-Sense could not find a USB device matching the Acer Predator PH16-71 Vendor/Product IDs (`VID:04F2 PID:0117`). Ensure your specific laptop model is supported. |
-| GPU Temp shows `N/A` | `nvidia-smi` is not installed or the proprietary NVIDIA drivers are not active. If using an integrated GPU, this is expected behavior. |
+```bash
+arch-sense doctor
+```
+
+The **Doctor** checks the kernel module, DKMS, your kernel's compiler, Secure Boot,
+`acer_wmi`, the Sense Interface, your group membership, the Lighting Backend and Boot
+Restore. Anything that isn't right comes with the exact command or step that fixes it.
+A trimmed example:
+
+```text
+✓ Laptop            Acer Predator PH16-71
+✓ Kernel module     linuwu_sense loaded
+✓ DKMS              built for 6.18.2-arch1-1
+✓ Permissions       in the arch-sense group
+✓ Lighting Backend  USB HID (04f2:0117)
+i Boot Restore      off (optional)
+                    → To reapply Saved Lighting at boot: `sudo systemctl enable arch-sense.service`
+```
+
+It exits non-zero when something is broken, and its output is plain text made for
+pasting into a [bug report](https://github.com/CPT-Dawn/Arch-Sense/issues/new). The same
+checks are one keypress away inside the app: press `d`.
+
+---
+
+## FAQ
+
+### I'm on CachyOS (or another clang-built kernel) and the module won't build
+
+Kernels built with clang need the module built with clang too, or the build bails out
+over the compiler mismatch. `linuwu-sense-dkms-git` handles that by itself, as long as
+the LLVM toolchain is installed:
+
+```bash
+paru -S clang lld llvm
+paru -S linuwu-sense-dkms-git
+```
+
+Reinstalling the module package makes DKMS build it again, this time with clang.
+`arch-sense doctor` shows which compiler your kernel was built with.
+
+### I use Secure Boot and the module is "missing"
+
+Secure Boot refuses to load unsigned modules. DKMS signs the modules it builds with its
+own key (`/var/lib/dkms/mok.key`, configured in `/etc/dkms/framework.conf`); your
+firmware just needs to trust it. If you boot through shim, enroll the key:
+
+```bash
+sudo mokutil --import /var/lib/dkms/mok.pub
+```
+
+Reboot and confirm the enrollment in the blue MokManager screen. If you manage your
+own keys (for example with `sbctl`), sign with those instead by pointing
+`mok_signing_key` and `mok_certificate` in `/etc/dkms/framework.conf` at them.
+
+### How do I uninstall it?
+
+```bash
+paru -Rns arch-sense linuwu-sense-dkms-git
+```
+
+pacman removes every file it installed. Two things stay on purpose, in case you want
+them back: your Saved Lighting in `/var/lib/arch-sense`, and the `arch-sense` group
+(pacman never deletes groups). To remove those too:
+
+```bash
+sudo rm -r /var/lib/arch-sense
+sudo groupdel arch-sense
+```
+
+### I'm upgrading from v1. Anything to do?
+
+Mostly no. Your keyboard settings carry over to Saved Lighting automatically on first
+run. Three things changed:
+
+- **Permissions are the package's job now.** v1's self-installing permission
+  setup is gone. Join the group as in [step 2](#install-in-three-steps), then remove
+  the files v1 installed by hand (the Doctor and the package's install message point them out too):
+
+  ```bash
+  sudo systemctl disable arch-sense-permissions.service
+  sudo rm -f /etc/udev/rules.d/70-arch-sense.rules /etc/systemd/system/arch-sense-permissions.service
+  ```
+
+- **Boot Restore is opt-in.** If you relied on lighting coming back at boot, enable it
+  as [shown above](#optional-boot-restore).
+- **The kernel module comes from the AUR.** If you built Linuwu-Sense by hand with
+  `make install`, Arch-Sense still works with it, but you no longer need to maintain it
+  yourself.
+
+---
+
+## Contributing
+
+Bug reports, ideas and pull requests are all welcome. Start with an
+[issue](https://github.com/CPT-Dawn/Arch-Sense/issues), and paste your
+`arch-sense doctor` output if something's broken.
+
+### Help support a new keyboard
+
+Arch-Sense can't drive every keyboard yet. The Jing-Mold `05af:666a` in the Predator
+PH16-72 is the known example. Adding one means learning how the keyboard is spoken to,
+and that takes **USB captures** from someone who owns it:
+
+1. Run `lsusb` and `arch-sense doctor` and note the keyboard's `vendor:product` ID.
+2. On Windows, install [Wireshark](https://www.wireshark.org/) with USBPcap and start
+   capturing on the keyboard's USB hub.
+3. In Acer's own software (PredatorSense / NitroSense), change one thing at a time:
+   a static colour, then brightness, then each effect, speed and direction. Write down
+   what you changed and when.
+4. Open an issue with the `lsusb` line, the Doctor output, the capture files (`.pcapng`)
+   and your notes.
+
+That's how the USB HID backend came to be: [ph16-71-rgb](https://github.com/Order52/ph16-71-rgb)
+documented the PH16-71's packets, and Arch-Sense speaks them.
+
+### Hacking on Arch-Sense
+
+You need Rust (stable, edition 2024) and `libusb`. No Acer laptop required:
+
+```bash
+cargo run -- --demo
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+Tests run against fake hardware trees (`src/fixture`) and a recording keyboard, so they
+never touch your machine. The vocabulary lives in [GLOSSARY.md](GLOSSARY.md) and the
+bigger decisions in [docs/adr](docs/adr). The AUR packages are in
+[packaging/aur](packaging/aur).
+
+The demo GIF is recorded with [VHS](https://github.com/charmbracelet/vhs) from
+[docs/demo.tape](docs/demo.tape): `cargo build --release && vhs docs/demo.tape`.
 
 ---
 
 ## Acknowledgments
 
-This project relies entirely on the foundational reverse-engineering work of the Linux hardware community:
+Arch-Sense stands on the reverse-engineering work of others:
 
-- **[Linuwu-Sense](https://github.com/0x7375646F/Linuwu-Sense)** by [@0x7375646F](https://github.com/0x7375646F) — The kernel module that exposes Acer Predator hardware controls via sysfs. Massive thanks for reverse-engineering the Acer WMI interface.
-- **[ph16-71-rgb](https://github.com/Order52/ph16-71-rgb)** by [@Order52](https://github.com/Order52) — The original Python implementation of the USB HID RGB protocol for the Acer Predator PH16-71 keyboard. Huge thanks for documenting the packet structure.
-
----
+- **[Linuwu-Sense](https://github.com/0x7375646F/Linuwu-Sense)** by [@0x7375646F](https://github.com/0x7375646F): the kernel module that exposes Acer's gaming-laptop controls on Linux. Arch-Sense would be a very pretty screensaver without it.
+- **[ph16-71-rgb](https://github.com/Order52/ph16-71-rgb)** by [@Order52](https://github.com/Order52): the original Python implementation of the PH16-71 keyboard's USB HID protocol.
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+MIT. See [LICENSE](LICENSE).
