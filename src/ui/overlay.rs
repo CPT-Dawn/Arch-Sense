@@ -5,12 +5,14 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 
 use crate::app::{App, Overlay};
+use crate::lighting::Rgb;
 use crate::theme::Theme;
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
     match &app.overlay {
         None => {}
         Some(Overlay::ConfirmCalibration) => confirm_calibration(frame, area),
+        Some(Overlay::Hex(digits)) => custom_colour(frame, area, digits),
         Some(Overlay::Doctor { report, scroll }) => {
             super::doctor::draw(frame, area, report, *scroll)
         }
@@ -69,11 +71,39 @@ fn confirm_calibration(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+/// The custom-colour input: the digits typed so far and, once there are six,
+/// a swatch of the colour they make.
+fn custom_colour(frame: &mut Frame, area: Rect, digits: &str) {
+    let inner = modal(frame, area, 40, 7, "Custom colour");
+    let colour = Rgb::from_hex(digits);
+    let swatch = match colour {
+        Some(rgb) => Span::styled("██████", Style::new().fg(Color::Rgb(rgb.r, rgb.g, rgb.b))),
+        None => Span::styled("░░░░░░", Style::new().fg(Theme::LINE)),
+    };
+    let help = if colour.is_some() {
+        "⏎ apply · esc cancel"
+    } else {
+        "type 6 hex digits · esc cancel"
+    };
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("# ", Style::new().fg(Theme::DIM)),
+            Span::styled(format!("{digits:_<6}"), Style::new().fg(Theme::TEXT).bold()),
+            Span::raw("   "),
+            swatch,
+        ]),
+        Line::raw(""),
+        Line::from(Span::styled(help, Style::new().fg(Theme::DIM))),
+    ];
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
 const BINDINGS: &[(&str, &str)] = &[
     ("↑ k  ↓ j", "Select the previous or next setting"),
     ("← h  → l", "Change the selected setting"),
     ("Enter  Space", "Toggle, run, or step forward"),
     ("Tab  Shift-Tab", "Jump between sections"),
+    ("#", "Type a custom hex colour (on Colour)"),
     ("?", "Show or hide this help"),
     ("d", "Open the Doctor"),
     ("Esc", "Close any dialog"),

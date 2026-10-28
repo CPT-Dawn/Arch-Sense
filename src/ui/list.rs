@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Paragraph};
 
 use super::WIDE;
 use crate::app::{App, Hit};
-use crate::models::Rgb;
+use crate::lighting::Rgb;
 use crate::settings::{Control, Section, Setting, SettingId};
 use crate::theme::Theme;
 
@@ -316,7 +316,7 @@ fn inline_control(app: &App, row: &Setting, selected: bool, area: Rect) -> Line<
                     Some(rgb) => ("█", to_color(*rgb)),
                     None => ("?", Theme::ACCENT_ALT),
                 };
-                let swatch = if index == *current {
+                let swatch = if Some(index) == *current {
                     format!("▐{glyph}▌")
                 } else {
                     format!(" {glyph} ")
@@ -326,6 +326,12 @@ fn inline_control(app: &App, row: &Setting, selected: bool, area: Rect) -> Line<
             out.push(
                 Span::styled(format!("  {name}"), Style::new().fg(Theme::TEXT)),
                 None,
+            );
+            out.push(Span::raw("  "), None);
+            // The option just past the swatches is "type a custom colour".
+            out.push(
+                Span::styled("# custom", Style::new().fg(Theme::DIM)),
+                Some(colours.len()),
             );
         }
         Control::Action { running } => {

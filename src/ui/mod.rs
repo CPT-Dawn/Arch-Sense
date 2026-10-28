@@ -3,7 +3,7 @@
 //! - [`header`]: brand, laptop model, Sense Interface, Lighting Backend;
 //! - [`cards`]: CPU, GPU, Fans and Battery gauge cards;
 //! - [`list`]: the scrollable settings list, grouped by section;
-//! - a pinned area below the list (empty for now; the keyboard preview goes here);
+//! - [`preview`]: the keyboard preview, pinned below the list while a Lighting row is selected;
 //! - [`footer`]: status on the left, key hints on the right;
 //! - [`overlay`]: any modal, drawn over everything.
 //!
@@ -16,11 +16,13 @@ mod footer;
 mod header;
 mod list;
 mod overlay;
+mod preview;
 
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
 use crate::app::App;
+use crate::settings::Section;
 use crate::theme::Theme;
 
 /// The smallest terminal the dashboard lays out in.
@@ -60,13 +62,27 @@ fn draw_dashboard(frame: &mut Frame, app: &App) {
     overlay::draw(frame, area, app);
 }
 
-/// Rows reserved below the list for a pinned panel, such as the keyboard
-/// preview while a Lighting row is selected. None yet.
-fn pinned_height(_app: &App) -> u16 {
-    0
+/// Rows reserved below the list for the keyboard preview, while a Lighting row is selected.
+fn pinned_height(app: &App) -> u16 {
+    if preview_shown(app) {
+        preview::HEIGHT
+    } else {
+        0
+    }
 }
 
-fn draw_pinned(_frame: &mut Frame, _area: Rect, _app: &App) {}
+fn preview_shown(app: &App) -> bool {
+    app.settings.lighting.is_some()
+        && app.selected_id().map(|id| id.section()) == Some(Section::Lighting)
+}
+
+fn draw_pinned(frame: &mut Frame, area: Rect, app: &App) {
+    if let Some(lighting) = &app.settings.lighting
+        && preview_shown(app)
+    {
+        preview::draw(frame, area.inner(Margin::new(2, 0)), lighting, app.clock);
+    }
+}
 
 fn too_small(frame: &mut Frame, area: Rect) {
     let message = vec![

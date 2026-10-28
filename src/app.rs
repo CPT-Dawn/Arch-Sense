@@ -4,6 +4,11 @@
 //! straight away and sent to the hardware worker. The worker's answer either
 //! confirms it in the footer or rolls it back with an inline error. The UI thread
 //! never touches sysfs or USB itself.
+//!
+//! Lighting is the one exception to "at once": it shows at once, but reaches the
+//! keyboard only after input settles for [`LIGHTING_DEBOUNCE`], so holding an
+//! arrow key makes one write rather than dozens. Time here is whatever
+//! [`App::tick`] is told has passed, which keeps the debounce testable.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -18,13 +23,13 @@ use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 
 use crate::capabilities::{Capability, SenseInterface};
-use crate::config::AppConfig;
 use crate::doctor::{self, Membership, Report};
 use crate::hardware::{HardwareEvent, HardwareHandle, HardwareRequest, spawn_worker};
 use crate::keyboard::{KeyboardTransport, UsbAccess};
+use crate::lighting::{Lighting, Rgb, saved};
 use crate::machine::MachineRoot;
-use crate::models::{Battery, FanMode, RgbSettings, SensorSnapshot};
-use crate::settings::{Change, Section, Setting, SettingId, SettingsModel};
+use crate::models::{Battery, FanMode, SensorSnapshot};
+use crate::settings::{Change, LightingField, Section, Setting, SettingId, SettingsModel};
 use crate::theme::ColorMode;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(33);
@@ -32,6 +37,10 @@ const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(1);
 const HISTORY_LIMIT: usize = 240;
 /// How long a confirmation stays in the footer.
 const CONFIRMATION_TIME: Duration = Duration::from_secs(4);
+/// How long lighting input has to settle before it is written to the keyboard.
+pub(crate) const LIGHTING_DEBOUNCE: Duration = Duration::from_millis(200);
+/// How many digits a custom hex colour has.
+const HEX_DIGITS: usize = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MessageLevel {
@@ -53,6 +62,8 @@ pub(crate) struct StatusMessage {
 pub(crate) enum Overlay {
     /// "Calibrate battery?" — only a yes starts it.
     ConfirmCalibration,
+    /// Typing a custom colour: the hex digits so far (uppercase, at most six).
+    Hex(String),
     /// The Doctor's checklist, scrolled down `scroll` lines.
     Doctor { report: Report, scroll: u16 },
     /// Every key and mouse binding.
@@ -127,10 +138,15 @@ pub struct App {
     confirmed: BTreeMap<Capability, String>,
     /// Writes sent but not yet answered, per Capability.
     in_flight: HashMap<Capability, usize>,
-    /// The latest lighting, shown again whenever a scan finds the keyboard.
-    last_lighting: RgbSettings,
-    /// What the lighting change in flight was, for its confirmation.
+    /// The latest lighting (Saved Lighting at first), shown again whenever a
+    /// scan finds its keyboard.
+    last_lighting: Option<Lighting>,
+    /// Lighting waiting for input to settle, and how long it has been quiet.
+    pending_lighting: Option<(Lighting, Duration)>,
+    /// What the latest lighting change was, for its confirmation.
     lighting_note: Option<String>,
+    /// Time the app has been told has passed; drives the keyboard preview.
+    pub(crate) clock: Duration,
     hardware: HardwareHandle,
     /// The machine, for the Doctor (hardware I/O itself stays on the worker).
     machine: MachineRoot,
@@ -143,14 +159,18 @@ impl App {
     /// Starts the app on `machine`, with keyboard lighting going through `keyboard`.
     /// Hardware I/O runs on a background worker; [`tick`](Self::tick) collects its results.
     pub fn new(machine: MachineRoot, keyboard: impl KeyboardTransport + 'static) -> Result<Self> {
-        let (config, config_warning) = AppConfig::load_with_warning(&machine);
-        let rgb = RgbSettings::from_config(&config.rgb);
+        let (saved_lighting, saved_warning) = match saved::load(&machine) {
+            Ok(lighting) => (lighting, None),
+            Err(error) => (None, Some(format!("✗ Saved Lighting ignored: {error:#}"))),
+        };
         let hardware = spawn_worker(machine.clone(), Box::new(keyboard))?;
         let now = Instant::now();
 
         let mut app = Self {
             settings: SettingsModel::default(),
-            last_lighting: rgb,
+            last_lighting: saved_lighting,
+            pending_lighting: None,
+            clock: Duration::ZERO,
             selected: None,
             overlay: None,
             color_mode: ColorMode::Truecolor,
@@ -169,7 +189,7 @@ impl App {
             last_snapshot_request: now - SNAPSHOT_INTERVAL,
             quit: false,
         };
-        if let Some(warning) = config_warning {
+        if let Some(warning) = saved_warning {
             app.set_message(MessageLevel::Error, warning);
         }
         app.request_snapshot();
@@ -214,11 +234,28 @@ impl App {
     }
 
     /// Applies finished hardware work and schedules the next poll.
-    pub fn tick(&mut self, _dt: Duration) {
+    pub fn tick(&mut self, dt: Duration) {
+        self.clock += dt;
         self.handle_hardware_events();
+
+        if let Some((_, quiet)) = &mut self.pending_lighting {
+            *quiet += dt;
+            if *quiet >= LIGHTING_DEBOUNCE {
+                self.flush_lighting();
+            }
+        }
 
         if self.last_snapshot_request.elapsed() >= SNAPSHOT_INTERVAL {
             self.request_snapshot();
+        }
+    }
+
+    /// Sends the lighting waiting for input to settle, if any.
+    fn flush_lighting(&mut self) {
+        if let Some((lighting, _)) = self.pending_lighting.take()
+            && let Err(error) = self.hardware.send(HardwareRequest::ApplyLighting(lighting))
+        {
+            self.set_message(MessageLevel::Error, error.to_string());
         }
     }
 
@@ -244,10 +281,13 @@ impl App {
                     self.snapshot_pending = false;
                     self.model = snapshot.model;
                     self.sensors.update(&snapshot.sensors);
-                    self.settings.lighting = match snapshot.keyboard {
-                        UsbAccess::NotFound => None,
-                        _ => self.settings.lighting.or(Some(self.last_lighting)),
-                    };
+                    self.settings.lighting = snapshot.lighting.map(|backend| {
+                        [self.settings.lighting.take(), self.last_lighting.clone()]
+                            .into_iter()
+                            .flatten()
+                            .find(|lighting| lighting.backend == backend)
+                            .unwrap_or_else(|| backend.default_lighting())
+                    });
                     self.keyboard = snapshot.keyboard;
                     self.settings.laptop = Some(snapshot.laptop);
                     // Keep values with a write in flight: the scan may predate the write.
@@ -362,6 +402,12 @@ impl App {
                     self.make(id, change);
                 }
             }
+            KeyCode::Char('#') => {
+                let id = SettingId::Lighting(LightingField::Colour);
+                if self.selected_id() == Some(id) && self.settings.control(id).is_some() {
+                    self.make(id, Some(Change::CustomColour));
+                }
+            }
             _ => {}
         }
     }
@@ -415,8 +461,12 @@ impl App {
 
     fn close_overlay(&mut self, overlay: Overlay) {
         self.overlay = None;
-        if overlay == Overlay::ConfirmCalibration {
-            self.set_message(MessageLevel::Info, "Battery calibration not started");
+        match overlay {
+            Overlay::ConfirmCalibration => {
+                self.set_message(MessageLevel::Info, "Battery calibration not started");
+            }
+            Overlay::Hex(_) => self.set_message(MessageLevel::Info, "Colour unchanged"),
+            _ => {}
         }
     }
 
@@ -426,6 +476,7 @@ impl App {
             return;
         }
         match overlay {
+            Overlay::Hex(digits) => self.on_hex_key(digits, key),
             Overlay::Doctor { report, scroll } => {
                 // A loose cap; the overlay clamps to what's actually left to show.
                 let limit = u16::try_from(report.checks().len() * 4).unwrap_or(u16::MAX);
@@ -468,6 +519,27 @@ impl App {
         }
     }
 
+    fn on_hex_key(&mut self, mut digits: String, key: KeyEvent) {
+        match key.code {
+            KeyCode::Backspace => {
+                digits.pop();
+                self.overlay = Some(Overlay::Hex(digits));
+            }
+            KeyCode::Char(c) if c.is_ascii_hexdigit() && digits.len() < HEX_DIGITS => {
+                digits.push(c.to_ascii_uppercase());
+                self.overlay = Some(Overlay::Hex(digits));
+            }
+            KeyCode::Enter => {
+                if let Some(rgb) = Rgb::from_hex(&digits) {
+                    self.overlay = None;
+                    let change = self.settings.custom_colour(rgb);
+                    self.make(SettingId::Lighting(LightingField::Colour), change);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn change_selected(&mut self, step: i8) {
         if let Some(id) = self.selected_id() {
             let change = self.settings.change(id, step);
@@ -485,6 +557,10 @@ impl App {
                 self.overlay = Some(Overlay::ConfirmCalibration);
                 return;
             }
+            Change::CustomColour => {
+                self.overlay = Some(Overlay::Hex(String::new()));
+                return;
+            }
             Change::Write { capability, value } => {
                 *self.in_flight.entry(*capability).or_default() += 1;
                 HardwareRequest::Write {
@@ -493,16 +569,17 @@ impl App {
                 }
             }
             Change::Lighting(lighting) => {
-                self.last_lighting = *lighting;
-                HardwareRequest::ApplyLighting(*lighting)
+                self.last_lighting = Some(lighting.clone());
+                self.settings.apply(&change);
+                if let Some(control) = self.settings.control(id) {
+                    self.lighting_note = Some(format!("{} → {}", id.label(), control.value_text()));
+                }
+                self.pending_lighting = Some((lighting.clone(), Duration::ZERO));
+                self.keep_selection_valid();
+                return;
             }
         };
         self.settings.apply(&change);
-        if let Change::Lighting(_) = change
-            && let Some(control) = self.settings.control(id)
-        {
-            self.lighting_note = Some(format!("{} → {}", id.label(), control.value_text()));
-        }
         self.keep_selection_valid();
         if let Err(error) = self.hardware.send(request) {
             self.set_message(MessageLevel::Error, error.to_string());
@@ -619,7 +696,10 @@ impl App {
 }
 
 impl Drop for App {
+    /// Writes any lighting still settling, then waits for the worker to finish,
+    /// so quitting straight after a change doesn't lose it.
     fn drop(&mut self) {
-        let _ = self.hardware.send(HardwareRequest::Shutdown);
+        self.flush_lighting();
+        self.hardware.shutdown();
     }
 }

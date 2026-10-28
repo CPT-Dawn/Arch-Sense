@@ -4,20 +4,16 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
+use std::thread::{self, JoinHandle};
 
 use anyhow::{Context, Result, bail};
 
 use crate::capabilities::{Capability, Laptop, detect};
-use crate::config::AppConfig;
 use crate::constants::setup_hint;
-use crate::constants::{BRIGHT_HW_MAX, PREAMBLE, SPEED_HW_FAST, SPEED_HW_SLOW};
-use crate::keyboard::{KeyboardTransport, Packet, UsbAccess, keyboard_access};
+use crate::keyboard::{KeyboardTransport, UsbAccess, keyboard_access};
+use crate::lighting::{self, Lighting, LightingBackend, saved};
 use crate::machine::MachineRoot;
-use crate::models::{
-    Battery, BatteryState, FanMode, OFF_EFFECT_INDEX, RANDOM_COLOR_INDEX, Rgb, RgbSettings,
-    SensorMetric, SensorSnapshot,
-};
+use crate::models::{Battery, BatteryState, FanMode, SensorMetric, SensorSnapshot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SensorRole {
@@ -51,8 +47,8 @@ pub(crate) enum HardwareRequest {
         capability: Capability,
         value: String,
     },
-    /// Sends `settings` to the keyboard and saves them as the Saved Lighting.
-    ApplyLighting(RgbSettings),
+    /// Sends `lighting` to the keyboard and saves it as the Saved Lighting.
+    ApplyLighting(Lighting),
     Shutdown,
 }
 
@@ -80,6 +76,8 @@ pub(crate) struct HardwareSnapshot {
     /// The laptop's model name from DMI, when it reads.
     pub(crate) model: Option<String>,
     pub(crate) keyboard: UsbAccess,
+    /// The keyboard's Lighting Backend, if it has one Arch-Sense drives.
+    pub(crate) lighting: Option<LightingBackend>,
     pub(crate) sensors: SensorSnapshot,
     /// The current raw value of every Capability present.
     pub(crate) values: BTreeMap<Capability, String>,
@@ -88,6 +86,7 @@ pub(crate) struct HardwareSnapshot {
 pub(crate) struct HardwareHandle {
     tx: Sender<HardwareRequest>,
     rx: Receiver<HardwareEvent>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl HardwareHandle {
@@ -100,6 +99,14 @@ impl HardwareHandle {
     pub(crate) fn drain(&self) -> Vec<HardwareEvent> {
         self.rx.try_iter().collect()
     }
+
+    /// Stops the worker once it has finished every request already sent, and waits for it.
+    pub(crate) fn shutdown(&mut self) {
+        let _ = self.tx.send(HardwareRequest::Shutdown);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
 }
 
 pub(crate) fn spawn_worker(
@@ -109,7 +116,7 @@ pub(crate) fn spawn_worker(
     let (request_tx, request_rx) = mpsc::channel();
     let (event_tx, event_rx) = mpsc::channel();
 
-    thread::Builder::new()
+    let worker = thread::Builder::new()
         .name("arch-sense-hardware".into())
         .spawn(move || worker_loop(machine, keyboard, request_rx, event_tx))
         .context("starting hardware worker")?;
@@ -117,6 +124,7 @@ pub(crate) fn spawn_worker(
     Ok(HardwareHandle {
         tx: request_tx,
         rx: event_rx,
+        worker: Some(worker),
     })
 }
 
@@ -136,8 +144,8 @@ fn worker_loop(
                     Err(reason) => HardwareEvent::WriteFailed { capability, reason },
                 }
             }
-            HardwareRequest::ApplyLighting(settings) => {
-                apply_lighting(m, &settings, keyboard.as_mut())
+            HardwareRequest::ApplyLighting(lighting) => {
+                apply_lighting(m, &lighting, keyboard.as_mut())
             }
             HardwareRequest::Shutdown => break,
         };
@@ -150,16 +158,13 @@ fn worker_loop(
 
 fn apply_lighting(
     m: &MachineRoot,
-    settings: &RgbSettings,
+    lighting: &Lighting,
     keyboard: &mut dyn KeyboardTransport,
 ) -> HardwareEvent {
-    if let Err(error) = apply_rgb_settings(settings, keyboard) {
+    if let Err(error) = lighting::apply(lighting, m, keyboard) {
         return HardwareEvent::LightingFailed(error.to_string());
     }
-    let config = AppConfig {
-        rgb: settings.to_config(),
-    };
-    match config.save(m) {
+    match saved::save(m, lighting) {
         Ok(()) => HardwareEvent::LightingApplied,
         Err(error) => HardwareEvent::LightingNotSaved(error.to_string()),
     }
@@ -177,12 +182,14 @@ pub(crate) fn collect_snapshot(m: &MachineRoot) -> HardwareSnapshot {
         .collect();
     let sensors = read_sensors(m, &laptop);
     let keyboard = keyboard_access(m);
+    let lighting = lighting::detect(m);
     let model = read_optional_string(&m.dmi_product_name());
 
     HardwareSnapshot {
         laptop,
         model,
         keyboard,
+        lighting,
         sensors,
         values,
     }
@@ -715,82 +722,5 @@ fn sysfs_error(
         anyhow::anyhow!("{action}{target} failed: {error}; {}", setup_hint())
     } else {
         anyhow::anyhow!("{action}{target} failed: {error}")
-    }
-}
-
-/// Sends the lighting in `settings` to the USB HID keyboard.
-pub(crate) fn apply_rgb_settings(
-    settings: &RgbSettings,
-    keyboard: &mut dyn KeyboardTransport,
-) -> Result<String> {
-    keyboard.send(&rgb_packets(settings))?;
-    Ok("Keyboard lighting applied".to_string())
-}
-
-fn rgb_packets(settings: &RgbSettings) -> Vec<Packet> {
-    if settings.effect_idx == OFF_EFFECT_INDEX {
-        return vec![PREAMBLE, [0x08, 0x02, 0x01, 0x00, 0x00, 0x01, 0x01, 0x9B]];
-    }
-
-    let mut packets = vec![PREAMBLE];
-    if settings.effect().has_color && settings.color_idx != RANDOM_COLOR_INDEX {
-        packets.push(make_color_packet(settings.color().rgb));
-    }
-    packets.push(make_effect_packet(settings));
-    packets
-}
-
-fn make_color_packet(color: Rgb) -> Packet {
-    [0x14, 0x00, 0x00, color.r, color.g, color.b, 0x00, 0x00]
-}
-
-fn make_effect_packet(settings: &RgbSettings) -> Packet {
-    let effect = settings.effect();
-    let hardware_brightness = ((settings.brightness as u16) * BRIGHT_HW_MAX as u16 / 100) as u8;
-    let hardware_speed = if settings.speed >= 100 {
-        SPEED_HW_FAST
-    } else {
-        let range = (SPEED_HW_SLOW - SPEED_HW_FAST) as u16;
-        (SPEED_HW_SLOW - (settings.speed as u16 * range / 100) as u8).max(SPEED_HW_FAST)
-    };
-    let color_preset = if settings.color_idx == RANDOM_COLOR_INDEX {
-        0x08
-    } else {
-        0x01
-    };
-    let direction = if effect.has_direction {
-        settings.direction_idx as u8 + 1
-    } else {
-        0x01
-    };
-
-    [
-        0x08,
-        0x02,
-        effect.opcode,
-        hardware_speed,
-        hardware_brightness,
-        color_preset,
-        direction,
-        0x9B,
-    ]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::RgbConfig;
-    use crate::models::RgbSettings;
-
-    #[test]
-    fn effect_packet_maps_brightness_and_speed_to_hardware_ranges() {
-        let mut settings = RgbSettings::from_config(&RgbConfig::default());
-        settings.brightness = 100;
-        settings.speed = 0;
-
-        let packet = make_effect_packet(&settings);
-
-        assert_eq!(packet[3], SPEED_HW_SLOW);
-        assert_eq!(packet[4], BRIGHT_HW_MAX);
     }
 }
