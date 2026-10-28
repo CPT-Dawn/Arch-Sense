@@ -24,6 +24,23 @@ const ETC_GROUP: &str = "/etc/group";
 /// Where v1's pkexec self-installer put its files (v2 ships them in the package).
 const UDEV_RULE: &str = "/etc/udev/rules.d/70-arch-sense.rules";
 const PERMISSION_SERVICE: &str = "/etc/systemd/system/arch-sense-permissions.service";
+const ETC_PASSWD: &str = "/etc/passwd";
+const SYS_MODULE_DIR: &str = "/sys/module";
+const FOUR_ZONE_FOLDER: &str = "four_zoned_kb";
+const DMI_SYS_VENDOR: &str = "/sys/class/dmi/id/sys_vendor";
+const KERNEL_RELEASE: &str = "/proc/sys/kernel/osrelease";
+const PROC_VERSION: &str = "/proc/version";
+const KERNEL_MODULES_DIR: &str = "/usr/lib/modules";
+const DKMS_TREE: &str = "/var/lib/dkms";
+/// The EFI global variable whose last byte is 1 when Secure Boot is on.
+const SECURE_BOOT_VAR: &str =
+    "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c";
+const HIDRAW_DIR: &str = "/sys/class/hidraw";
+/// Present when the Boot Restore unit is enabled (`systemctl enable arch-sense`).
+const BOOT_RESTORE_LINK: &str = "/etc/systemd/system/multi-user.target.wants/arch-sense.service";
+/// v1's permission service is enabled through this link.
+const PERMISSION_SERVICE_LINK: &str =
+    "/etc/systemd/system/multi-user.target.wants/arch-sense-permissions.service";
 
 /// A base directory under which all well-known system paths resolve.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -139,5 +156,63 @@ impl MachineRoot {
     /// v1's self-installed permission service, now a leftover the user may remove.
     pub fn permission_service(&self) -> PathBuf {
         self.resolve(PERMISSION_SERVICE)
+    }
+
+    pub fn etc_passwd(&self) -> PathBuf {
+        self.resolve(ETC_PASSWD)
+    }
+
+    /// A kernel module's folder, present while the module is loaded, e.g. `acer_wmi`.
+    pub fn sys_module(&self, name: &str) -> PathBuf {
+        self.resolve(SYS_MODULE_DIR).join(name)
+    }
+
+    /// The Four-Zone keyboard lighting folder Linuwu-Sense creates.
+    pub fn four_zone_kb_dir(&self) -> PathBuf {
+        self.linuwu_sense_dir().join(FOUR_ZONE_FOLDER)
+    }
+
+    /// The laptop's manufacturer from DMI, e.g. `Acer`.
+    pub fn dmi_sys_vendor(&self) -> PathBuf {
+        self.resolve(DMI_SYS_VENDOR)
+    }
+
+    /// The running kernel's release, e.g. `6.18.2-arch1-1`.
+    pub fn kernel_release(&self) -> PathBuf {
+        self.resolve(KERNEL_RELEASE)
+    }
+
+    /// The running kernel's banner, which names the compiler that built it.
+    pub fn proc_version(&self) -> PathBuf {
+        self.resolve(PROC_VERSION)
+    }
+
+    /// The installed modules of kernel `release`; `build/` inside holds its headers.
+    pub fn kernel_modules_dir(&self, release: &str) -> PathBuf {
+        self.resolve(KERNEL_MODULES_DIR).join(release)
+    }
+
+    /// DKMS's state tree: `<module>/<version>/<kernel>/<arch>/module/` per build.
+    pub fn dkms_tree(&self) -> PathBuf {
+        self.resolve(DKMS_TREE)
+    }
+
+    pub fn secure_boot_var(&self) -> PathBuf {
+        self.resolve(SECURE_BOOT_VAR)
+    }
+
+    /// The hidraw class folder, one `hidrawN` per HID device.
+    pub fn hidraw_dir(&self) -> PathBuf {
+        self.resolve(HIDRAW_DIR)
+    }
+
+    /// The symlink systemd creates when Boot Restore is enabled.
+    pub fn boot_restore_link(&self) -> PathBuf {
+        self.resolve(BOOT_RESTORE_LINK)
+    }
+
+    /// The symlink that enables v1's leftover permission service.
+    pub fn permission_service_link(&self) -> PathBuf {
+        self.resolve(PERMISSION_SERVICE_LINK)
     }
 }

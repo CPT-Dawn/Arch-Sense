@@ -25,6 +25,8 @@ use tempfile::TempDir;
 use crate::keyboard::{USB_HID_PRODUCT_ID, USB_HID_VENDOR_ID};
 use crate::machine::MachineRoot;
 
+mod doctor;
+
 /// Every attribute a Predator (PH16-71) or Nitro v4 Sense Interface exposes.
 const FULL_ATTRS: [(&str, &str); 7] = [
     ("backlight_timeout", "0"),

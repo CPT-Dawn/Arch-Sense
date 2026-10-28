@@ -16,6 +16,7 @@ use ratatui::layout::{Position, Rect};
 
 use crate::capabilities::{Capability, SenseInterface};
 use crate::config::AppConfig;
+use crate::doctor::{self, Membership, Report};
 use crate::hardware::{HardwareEvent, HardwareHandle, HardwareRequest, spawn_worker};
 use crate::keyboard::{KeyboardTransport, UsbAccess};
 use crate::machine::MachineRoot;
@@ -48,6 +49,8 @@ pub(crate) struct StatusMessage {
 pub(crate) enum Overlay {
     /// "Calibrate battery?" — only a yes starts it.
     ConfirmCalibration,
+    /// The Doctor's checklist, scrolled down `scroll` lines.
+    Doctor { report: Report, scroll: u16 },
 }
 
 /// Something clickable drawn in the last frame, for mouse hit-testing.
@@ -116,6 +119,8 @@ pub struct App {
     /// What the lighting change in flight was, for its confirmation.
     lighting_note: Option<String>,
     hardware: HardwareHandle,
+    /// The machine, for the Doctor (hardware I/O itself stays on the worker).
+    machine: MachineRoot,
     snapshot_pending: bool,
     last_snapshot_request: Instant,
     quit: bool,
@@ -127,7 +132,7 @@ impl App {
     pub fn new(machine: MachineRoot, keyboard: impl KeyboardTransport + 'static) -> Result<Self> {
         let (config, config_warning) = AppConfig::load_with_warning(&machine);
         let rgb = RgbSettings::from_config(&config.rgb);
-        let hardware = spawn_worker(machine, Box::new(keyboard))?;
+        let hardware = spawn_worker(machine.clone(), Box::new(keyboard))?;
         let now = Instant::now();
 
         let mut app = Self {
@@ -145,6 +150,7 @@ impl App {
             in_flight: HashMap::new(),
             lighting_note: None,
             hardware,
+            machine,
             snapshot_pending: false,
             last_snapshot_request: now - SNAPSHOT_INTERVAL,
             quit: false,
@@ -322,6 +328,7 @@ impl App {
 
         match key.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => self.quit = true,
+            KeyCode::Char('d') | KeyCode::Char('D') => self.open_doctor(),
             KeyCode::Tab => self.jump_section(1),
             KeyCode::BackTab => self.jump_section(-1),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
@@ -338,8 +345,31 @@ impl App {
         }
     }
 
+    /// Runs the Doctor now and shows its checklist.
+    fn open_doctor(&mut self) {
+        let report = doctor::diagnose(&self.machine, Membership::current(&self.machine));
+        self.overlay = Some(Overlay::Doctor { report, scroll: 0 });
+    }
+
     fn on_overlay_key(&mut self, overlay: Overlay, key: KeyEvent) {
         match overlay {
+            Overlay::Doctor { report, scroll } => {
+                // A loose cap; the overlay clamps to what's actually left to show.
+                let limit = u16::try_from(report.checks().len() * 4).unwrap_or(u16::MAX);
+                let scroll = match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('d') => {
+                        self.overlay = None;
+                        return;
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => scroll.saturating_sub(1),
+                    KeyCode::Down | KeyCode::Char('j') => (scroll + 1).min(limit),
+                    KeyCode::PageUp => scroll.saturating_sub(10),
+                    KeyCode::PageDown => (scroll + 10).min(limit),
+                    KeyCode::Home => 0,
+                    _ => scroll,
+                };
+                self.overlay = Some(Overlay::Doctor { report, scroll });
+            }
             Overlay::ConfirmCalibration => match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                     self.overlay = None;

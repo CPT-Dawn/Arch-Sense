@@ -11,6 +11,7 @@
 //! things landed ([`App::record_hit`]) and the list's scroll position.
 
 mod cards;
+mod doctor;
 mod footer;
 mod header;
 mod list;

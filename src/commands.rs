@@ -1,6 +1,9 @@
+use std::io::{self, Write};
+
 use anyhow::Result;
 
 use crate::config::AppConfig;
+use crate::doctor::{self, Membership};
 use crate::hardware;
 use crate::keyboard::{KeyboardTransport, UsbAccess, keyboard_access};
 use crate::machine::MachineRoot;
@@ -28,4 +31,18 @@ pub fn apply_saved_config(
             Err(error)
         }
     }
+}
+
+/// `arch-sense doctor`: writes the Doctor's checklist to `out` and returns the
+/// exit code, non-zero exactly when a check failed with an error.
+pub fn doctor(
+    machine: &MachineRoot,
+    membership: Membership,
+    out: &mut impl Write,
+) -> io::Result<i32> {
+    let report = doctor::diagnose(machine, membership);
+    writeln!(out, "Arch-Sense Doctor (v{})", env!("CARGO_PKG_VERSION"))?;
+    writeln!(out)?;
+    write!(out, "{report}")?;
+    Ok(report.exit_code())
 }
