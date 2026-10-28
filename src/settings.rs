@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::capabilities::{Capability, Laptop};
 use crate::lighting::{Colour, Lighting, LightingBackend, PALETTE, Rgb};
+use crate::models::FanMode;
 
 /// A group of settings under one heading.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -384,7 +385,8 @@ fn hardware_control(capability: Capability, raw: &str, laptop: &Laptop) -> Contr
         Capability::ThermalProfile | Capability::Fans | Capability::UsbCharging => {
             let choices = hardware_choices(capability, laptop);
             let current = if capability == Capability::Fans {
-                fan_choice(raw)
+                FanMode::from_fan_speed(raw)
+                    .and_then(|mode| FanMode::ALL.iter().position(|&m| m == mode))
             } else {
                 choices.iter().position(|(value, _)| value == raw)
             };
@@ -415,45 +417,17 @@ fn hardware_choices(capability: Capability, laptop: &Laptop) -> Vec<(String, Str
         Capability::ThermalProfile => laptop
             .thermal_profiles
             .iter()
-            .map(|profile| (profile.clone(), thermal_label(profile)))
+            .map(|profile| (profile.name().to_string(), profile.label()))
             .collect(),
-        // Auto hands the fans back to the firmware; Max pins them. Nothing in between.
-        Capability::Fans => pairs(&[("0,0", "Auto"), ("100,100", "Max")]),
+        Capability::Fans => FanMode::ALL
+            .iter()
+            .map(|mode| (mode.fan_speed().to_string(), mode.label().to_string()))
+            .collect(),
         Capability::UsbCharging => {
             pairs(&[("0", "Off"), ("10", "10%"), ("20", "20%"), ("30", "30%")])
         }
         _ => Vec::new(),
     }
-}
-
-/// Auto when every fan is at 0, Max when every fan is at 100 or more.
-fn fan_choice(raw: &str) -> Option<usize> {
-    let speeds: Option<Vec<u32>> = raw
-        .split(',')
-        .map(|part| part.trim().parse().ok())
-        .collect();
-    let speeds = speeds.filter(|speeds| !speeds.is_empty())?;
-    if speeds.iter().all(|&speed| speed == 0) {
-        Some(0)
-    } else if speeds.iter().all(|&speed| speed >= 100) {
-        Some(1)
-    } else {
-        None
-    }
-}
-
-/// A Thermal Profile name as people say it, e.g. `balanced-performance` → "Balanced Performance".
-fn thermal_label(profile: &str) -> String {
-    profile
-        .split('-')
-        .map(|word| {
-            let mut chars = word.chars();
-            chars.next().map_or_else(String::new, |first| {
-                first.to_uppercase().chain(chars).collect()
-            })
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// A lighting row's control, or `None` when the current effect doesn't use it.

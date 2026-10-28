@@ -27,6 +27,35 @@ pub(crate) enum FanMode {
 }
 
 impl FanMode {
+    /// Both modes, in the order the Fans row offers them.
+    pub(crate) const ALL: [Self; 2] = [Self::Auto, Self::Max];
+
+    /// What Linuwu-Sense's `fan_speed` takes for this mode: 0 hands every fan
+    /// back to the firmware, 100 pins it. Arch-Sense offers nothing in between.
+    pub(crate) fn fan_speed(self) -> &'static str {
+        match self {
+            Self::Auto => "0,0",
+            Self::Max => "100,100",
+        }
+    }
+
+    /// The mode a `fan_speed` value means: Auto when every fan is at 0, Max when
+    /// every fan is at 100 or more, `None` for a custom speed set elsewhere.
+    pub(crate) fn from_fan_speed(raw: &str) -> Option<Self> {
+        let speeds: Option<Vec<u32>> = raw
+            .split(',')
+            .map(|part| part.trim().parse().ok())
+            .collect();
+        let speeds = speeds.filter(|speeds| !speeds.is_empty())?;
+        if speeds.iter().all(|&speed| speed == 0) {
+            Some(Self::Auto)
+        } else if speeds.iter().all(|&speed| speed >= 100) {
+            Some(Self::Max)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Auto => "Auto",
