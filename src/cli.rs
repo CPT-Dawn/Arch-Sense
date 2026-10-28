@@ -13,6 +13,10 @@ pub struct Cli {
     #[arg(long)]
     pub apply: bool,
 
+    /// Try the full UI on a simulated laptop; touches nothing on this machine
+    #[arg(long, conflicts_with = "apply")]
+    pub demo: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }

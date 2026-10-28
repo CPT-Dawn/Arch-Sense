@@ -115,6 +115,11 @@ impl FakeMachineBuilder {
         self.file(MachineRoot::dmi_product_name, format!("{name}\n"))
     }
 
+    /// The laptop's DMI vendor, e.g. `Acer`.
+    pub fn sys_vendor(self, name: &str) -> Self {
+        self.file(MachineRoot::dmi_sys_vendor, format!("{name}\n"))
+    }
+
     /// Makes `path` readable but not writable, the way an attribute looks to a
     /// user outside the `arch-sense` group. Root ignores this, so tests relying
     /// on it should skip when run as root.
