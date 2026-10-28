@@ -4,13 +4,16 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use ratatui::Frame;
+
 use crate::config::AppConfig;
-use crate::hardware::{spawn_worker, HardwareEvent, HardwareHandle, HardwareRequest};
+use crate::hardware::{HardwareEvent, HardwareHandle, HardwareRequest, spawn_worker};
+use crate::keyboard::{KeyboardTransport, UsbAccess};
+use crate::machine::MachineRoot;
 use crate::models::{
     ControlId, ControlItem, ControlKind, FanMode, FocusPanel, RgbField, RgbSettings, SensorMetric,
     SensorSnapshot,
 };
-use crate::permissions::UsbAccess;
 use crate::ui::draw;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(33);
@@ -161,16 +164,19 @@ pub struct App {
     pub(crate) focus_pulse: f64,
     pub(crate) rgb_phase: f64,
     config: AppConfig,
+    machine: MachineRoot,
     hardware: HardwareHandle,
     last_snapshot_request: Instant,
     quit: bool,
 }
 
 impl App {
-    pub fn new() -> Result<Self> {
-        let (config, config_warning) = AppConfig::load_with_warning();
+    /// Starts the app on `machine`, with keyboard lighting going through `keyboard`.
+    /// Hardware I/O runs on a background worker; [`tick`](Self::tick) collects its results.
+    pub fn new(machine: MachineRoot, keyboard: impl KeyboardTransport + 'static) -> Result<Self> {
+        let (config, config_warning) = AppConfig::load_with_warning(&machine);
         let rgb = RgbSettings::from_config(&config.rgb);
-        let hardware = spawn_worker()?;
+        let hardware = spawn_worker(machine.clone(), Box::new(keyboard))?;
         let now = Instant::now();
 
         let mut app = Self {
@@ -194,6 +200,7 @@ impl App {
             focus_pulse: 1.0,
             rgb_phase: 0.0,
             config,
+            machine,
             hardware,
             last_snapshot_request: now - SNAPSHOT_INTERVAL,
             quit: false,
@@ -210,27 +217,32 @@ impl App {
             let delta = frame_started.saturating_duration_since(last_frame);
             last_frame = frame_started;
 
-            self.on_frame(delta);
-            terminal.draw(|frame| draw(frame, &self))?;
+            self.tick(delta);
+            terminal.draw(|frame| self.render(frame))?;
 
             if self.quit {
                 break;
             }
 
             let timeout = FRAME_INTERVAL.saturating_sub(frame_started.elapsed());
-            if event::poll(timeout)? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
-                        self.on_key(key);
-                    }
-                }
+            if event::poll(timeout)?
+                && let Event::Key(key) = event::read()?
+                && key.kind == KeyEventKind::Press
+            {
+                self.handle_key(key);
             }
         }
 
         Ok(())
     }
 
-    fn on_frame(&mut self, dt: Duration) {
+    /// Draws the whole UI into `frame`.
+    pub fn render(&self, frame: &mut Frame) {
+        draw(frame, self);
+    }
+
+    /// Advances animations by `dt`, applies finished hardware work and schedules the next poll.
+    pub fn tick(&mut self, dt: Duration) {
         self.sensors.advance(dt);
         self.focus_pulse = (self.focus_pulse - dt.as_secs_f64() * 3.2).max(0.0);
         self.rgb_phase = (self.rgb_phase + dt.as_secs_f64() * 18.0) % 1000.0;
@@ -290,7 +302,7 @@ impl App {
                     self.rgb_pending = false;
                     self.rgb_dirty = false;
                     self.config.rgb = self.rgb.to_config();
-                    match self.config.save() {
+                    match self.config.save(&self.machine) {
                         Ok(()) => self.set_message(MessageLevel::Success, message),
                         Err(error) => self.set_message(
                             MessageLevel::Error,
@@ -306,7 +318,8 @@ impl App {
         }
     }
 
-    fn on_key(&mut self, key: KeyEvent) {
+    /// Reacts to one key press.
+    pub fn handle_key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
             return;
@@ -492,10 +505,7 @@ impl App {
             return;
         }
 
-        match self
-            .hardware
-            .send(HardwareRequest::ApplyRgb(self.rgb))
-        {
+        match self.hardware.send(HardwareRequest::ApplyRgb(self.rgb)) {
             Ok(()) => {
                 self.rgb_pending = true;
                 self.set_message(MessageLevel::Info, "Applying keyboard lighting");
@@ -517,11 +527,11 @@ impl App {
 
         self.controls = controls;
 
-        if let Some(id) = selected_id {
-            if let Some(index) = self.controls.iter().position(|item| item.id == id) {
-                self.selected_control = index;
-                return;
-            }
+        if let Some(id) = selected_id
+            && let Some(index) = self.controls.iter().position(|item| item.id == id)
+        {
+            self.selected_control = index;
+            return;
         }
 
         if self.selected_control >= self.controls.len() {

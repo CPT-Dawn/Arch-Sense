@@ -5,8 +5,8 @@ use ratatui::symbols;
 use ratatui::widgets::*;
 
 use crate::app::{AnimatedMetric, App, MessageLevel};
-use crate::models::{FanMode, FocusPanel, Rgb, RgbField, COLOR_PALETTE, RANDOM_COLOR_INDEX};
-use crate::permissions::UsbAccess;
+use crate::keyboard::UsbAccess;
+use crate::models::{COLOR_PALETTE, FanMode, FocusPanel, RANDOM_COLOR_INDEX, Rgb, RgbField};
 use crate::theme::Theme;
 
 /// Consistent spacing/padding throughout the UI (in character units)
@@ -34,7 +34,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(Block::new().style(base_style), area);
 
     // Standardized vertical layout: Header (5), Body (Min 0), Footer (5)
-    // We reduce the vertical margin to 0 to let the lines hit the edges if desired, 
+    // We reduce the vertical margin to 0 to let the lines hit the edges if desired,
     // but keep horizontal margin for breathing room.
     let [header_area, body_area, footer_area] = Layout::vertical([
         Constraint::Length(4),
@@ -51,20 +51,16 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
 
 fn draw_body(frame: &mut Frame, area: Rect, app: &App) {
     // 50/50 split for better visual balance on modern screens
-    let [left, right] = Layout::horizontal([
-        Constraint::Percentage(50),
-        Constraint::Percentage(50),
-    ])
-    .spacing(SPACING)
-    .areas(area);
+    let [left, right] =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .spacing(SPACING)
+            .areas(area);
 
     // Even split for controls and keyboard
-    let [controls, rgb] = Layout::vertical([
-        Constraint::Percentage(50),
-        Constraint::Percentage(50),
-    ])
-    .spacing(SPACING)
-    .areas(left);
+    let [controls, rgb] =
+        Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .spacing(SPACING)
+            .areas(left);
 
     draw_controls(frame, controls, app);
     draw_rgb(frame, rgb, app);
@@ -154,7 +150,6 @@ fn draw_header(f: &mut Frame, area: Rect) {
     ])
     .centered();
 
-
     // Vertically center text in the 5-row area (row 2 is middle)
     let title_area = Rect::new(area.x, area.y + 1, area.width, 1);
     f.render_widget(Paragraph::new(title), title_area);
@@ -196,7 +191,7 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
             let selected = app.focus == FocusPanel::Controls && index == app.selected_control;
             let pending = item.pending.is_some();
             let error = item.last_error.is_some();
-            
+
             // Define the row background style
             let row_style = if selected {
                 style_with_bg(Style::new(), Theme::ELEVATED)
@@ -209,7 +204,7 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
             } else {
                 Style::new().fg(Theme::TEXT_PRIMARY)
             };
-            
+
             let value_style = if error {
                 Style::new().fg(Theme::STATE_ERROR)
             } else if pending {
@@ -219,7 +214,7 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
             } else {
                 Style::new().fg(Theme::VALUE_PRIMARY)
             };
-            
+
             let marker = if selected { "▸ " } else { "  " };
             let state = if app.control_pending == Some(item.id) {
                 "APPLY"
@@ -240,7 +235,8 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
                     pending,
                     error,
                 ))),
-            ]).style(row_style)
+            ])
+            .style(row_style)
         })
         .collect::<Vec<_>>();
 
@@ -267,12 +263,9 @@ fn draw_rgb(frame: &mut Frame, area: Rect, app: &App) {
         .margin(SPACING)
         .split(inner)[0];
 
-    let [rows_area, palette_area] = Layout::vertical([
-        Constraint::Min(5),
-        Constraint::Length(1),
-    ])
-    .spacing(SPACING)
-    .areas(content_area);
+    let [rows_area, palette_area] = Layout::vertical([Constraint::Min(5), Constraint::Length(1)])
+        .spacing(SPACING)
+        .areas(content_area);
 
     draw_rgb_rows(frame, rows_area, app);
     draw_palette(frame, palette_area, app);
@@ -293,7 +286,7 @@ fn draw_rgb_rows(frame: &mut Frame, area: Rect, app: &App) {
         .enumerate()
         .map(|(index, (field, value))| {
             let selected = app.focus == FocusPanel::Rgb && index == app.selected_rgb_field;
-            
+
             let row_style = if selected {
                 style_with_bg(Style::new(), Theme::ELEVATED)
             } else {
@@ -305,7 +298,7 @@ fn draw_rgb_rows(frame: &mut Frame, area: Rect, app: &App) {
             } else {
                 Style::new().fg(Theme::TEXT_PRIMARY)
             };
-            
+
             let value_style = if selected {
                 Style::new().fg(Theme::VALUE_SELECTED).bold()
             } else {
@@ -316,7 +309,8 @@ fn draw_rgb_rows(frame: &mut Frame, area: Rect, app: &App) {
                 Cell::from(if selected { "▸ " } else { "  " }).style(style),
                 Cell::from(field.label()).style(style),
                 Cell::from(value).style(value_style),
-            ]).style(row_style)
+            ])
+            .style(row_style)
         })
         .collect::<Vec<_>>();
 
@@ -379,37 +373,50 @@ fn draw_sensors(frame: &mut Frame, area: Rect, app: &App) {
         .margin(SPACING)
         .split(inner)[0];
 
-    let [temps_area, fans_area] = Layout::vertical([
-        Constraint::Percentage(50),
-        Constraint::Percentage(50),
-    ])
-    .spacing(SPACING)
-    .areas(content_area);
+    let [temps_area, fans_area] =
+        Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .spacing(SPACING)
+            .areas(content_area);
 
     draw_overlay_chart(
         frame,
         temps_area,
         "Temperatures",
-        &app.sensors.cpu_temp,
-        &app.sensors.cpu_temp_history,
-        &app.sensors.gpu_temp,
-        &app.sensors.gpu_temp_history,
         MetricKind::Temp,
-        None,
-        None,
+        ChartSeries {
+            metric: &app.sensors.cpu_temp,
+            history: &app.sensors.cpu_temp_history,
+            mode: None,
+        },
+        ChartSeries {
+            metric: &app.sensors.gpu_temp,
+            history: &app.sensors.gpu_temp_history,
+            mode: None,
+        },
     );
     draw_overlay_chart(
         frame,
         fans_area,
         "Fan Speeds",
-        &app.sensors.cpu_fan,
-        &app.sensors.cpu_fan_history,
-        &app.sensors.gpu_fan,
-        &app.sensors.gpu_fan_history,
         MetricKind::Fan,
-        Some(app.sensors.cpu_fan_mode),
-        Some(app.sensors.gpu_fan_mode),
+        ChartSeries {
+            metric: &app.sensors.cpu_fan,
+            history: &app.sensors.cpu_fan_history,
+            mode: Some(app.sensors.cpu_fan_mode),
+        },
+        ChartSeries {
+            metric: &app.sensors.gpu_fan,
+            history: &app.sensors.gpu_fan_history,
+            mode: Some(app.sensors.gpu_fan_mode),
+        },
     );
+}
+
+/// One line on an overlay chart: a live metric, its history and an optional fan mode.
+struct ChartSeries<'a> {
+    metric: &'a AnimatedMetric,
+    history: &'a VecDeque<u64>,
+    mode: Option<FanMode>,
 }
 
 #[derive(Clone, Copy)]
@@ -422,20 +429,18 @@ fn draw_overlay_chart(
     frame: &mut Frame,
     area: Rect,
     title: &str,
-    cpu_metric: &AnimatedMetric,
-    cpu_history: &VecDeque<u64>,
-    gpu_metric: &AnimatedMetric,
-    gpu_history: &VecDeque<u64>,
     kind: MetricKind,
-    cpu_mode: Option<FanMode>,
-    gpu_mode: Option<FanMode>,
+    cpu: ChartSeries,
+    gpu: ChartSeries,
 ) {
     if area.height < 5 {
         return;
     }
 
-    let [header_area, chart_area] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(0)])
+    let (cpu_metric, cpu_history, cpu_mode) = (cpu.metric, cpu.history, cpu.mode);
+    let (gpu_metric, gpu_history, gpu_mode) = (gpu.metric, gpu.history, gpu.mode);
+
+    let [header_area, chart_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)])
         .spacing(1) // Add space between header and chart
         .areas(area);
 
@@ -455,7 +460,10 @@ fn draw_overlay_chart(
 
     // Header with polished legend
     let mut header_spans = vec![
-        Span::styled(format!("{title:<14}"), Style::new().fg(Theme::TEXT_PRIMARY).bold()),
+        Span::styled(
+            format!("{title:<14}"),
+            Style::new().fg(Theme::TEXT_PRIMARY).bold(),
+        ),
         Span::styled("● ", Style::new().fg(cpu_color)),
         Span::styled("CPU ", Style::new().fg(Theme::TEXT_SECONDARY)),
         Span::styled(format!("{cpu_val} "), Style::new().fg(cpu_color).bold()),
@@ -470,7 +478,10 @@ fn draw_overlay_chart(
 
     header_spans.push(Span::styled(" ● ", Style::new().fg(gpu_color)));
     header_spans.push(Span::styled("GPU ", Style::new().fg(Theme::TEXT_SECONDARY)));
-    header_spans.push(Span::styled(format!("{gpu_val} "), Style::new().fg(gpu_color).bold()));
+    header_spans.push(Span::styled(
+        format!("{gpu_val} "),
+        Style::new().fg(gpu_color).bold(),
+    ));
 
     if let Some(mode) = gpu_mode {
         header_spans.push(Span::styled(
@@ -513,23 +524,21 @@ fn draw_overlay_chart(
     let y_max = cpu_metric.max.max(gpu_metric.max);
     let chart = Chart::new(datasets)
         .block(Block::new().padding(Padding::new(1, 1, 0, 0)))
-        .x_axis(
-            Axis::default()
-                .bounds([0.0, width as f64])
-                .labels(vec![
-                    Span::styled("Past", Style::new().fg(Theme::TEXT_TERTIARY)),
-                    Span::styled("Now", Style::new().fg(Theme::TEXT_TERTIARY)),
-                ]),
-        )
-        .y_axis(
-            Axis::default()
-                .bounds([0.0, y_max])
-                .labels(vec![
-                    Span::styled("0", Style::new().fg(Theme::TEXT_TERTIARY)),
-                    Span::styled(format!("{:.0}", y_max / 2.0), Style::new().fg(Theme::TEXT_TERTIARY)),
-                    Span::styled(format!("{:.0}", y_max), Style::new().fg(Theme::TEXT_TERTIARY)),
-                ]),
-        );
+        .x_axis(Axis::default().bounds([0.0, width as f64]).labels(vec![
+            Span::styled("Past", Style::new().fg(Theme::TEXT_TERTIARY)),
+            Span::styled("Now", Style::new().fg(Theme::TEXT_TERTIARY)),
+        ]))
+        .y_axis(Axis::default().bounds([0.0, y_max]).labels(vec![
+            Span::styled("0", Style::new().fg(Theme::TEXT_TERTIARY)),
+            Span::styled(
+                format!("{:.0}", y_max / 2.0),
+                Style::new().fg(Theme::TEXT_TERTIARY),
+            ),
+            Span::styled(
+                format!("{:.0}", y_max),
+                Style::new().fg(Theme::TEXT_TERTIARY),
+            ),
+        ]));
 
     frame.render_widget(chart, chart_area);
 }
@@ -596,14 +605,20 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
                     crate::models::ControlKind::Toggle => {
                         hints.extend(vec![
                             Span::styled(" ↵ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
-                            Span::styled(format!("Toggle {} ", control.label()), Style::new().fg(Theme::TEXT_SECONDARY)),
+                            Span::styled(
+                                format!("Toggle {} ", control.label()),
+                                Style::new().fg(Theme::TEXT_SECONDARY),
+                            ),
                             Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
                         ]);
                     }
                     crate::models::ControlKind::Choice(_) => {
                         hints.extend(vec![
                             Span::styled(" ←→ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
-                            Span::styled(format!("Choose {} ", control.label()), Style::new().fg(Theme::TEXT_SECONDARY)),
+                            Span::styled(
+                                format!("Choose {} ", control.label()),
+                                Style::new().fg(Theme::TEXT_SECONDARY),
+                            ),
                             Span::styled(" • ", Style::new().fg(Theme::TEXT_DISABLED)),
                             Span::styled(" ↵ ", Style::new().fg(Theme::BRAND_PRIMARY).bold()),
                             Span::styled("Apply ", Style::new().fg(Theme::TEXT_SECONDARY)),
@@ -651,7 +666,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 
     // 3. Status Section
     hints.push(Span::styled("  │  ", Style::new().fg(Theme::BORDER_IDLE)));
-    
+
     // Determine system status: prioritize hardware errors over message logs
     let (status_color, status_text) = if !app.module_loaded {
         (Theme::STATE_ERROR, "Kernel Module Missing")
@@ -661,10 +676,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             UsbAccess::NotFound => (Theme::STATE_WARNING, "Keyboard Not Found"),
             UsbAccess::Error(e) => (Theme::STATE_ERROR, e.as_str()),
             UsbAccess::Accessible => {
-                if app.message.level == crate::app::MessageLevel::Info || app.message.level == crate::app::MessageLevel::Success {
-                     (Theme::STATE_SUCCESS, "Ready")
+                if app.message.level == crate::app::MessageLevel::Info
+                    || app.message.level == crate::app::MessageLevel::Success
+                {
+                    (Theme::STATE_SUCCESS, "Ready")
                 } else {
-                     (message_color(app.message.level), app.message.text.as_str())
+                    (message_color(app.message.level), app.message.text.as_str())
                 }
             }
         }
@@ -685,10 +702,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 
     // Render content on row 2 (middle of the 5-row footer area)
     let content_area = Rect::new(area.x, area.y + 2, area.width, 1);
-    frame.render_widget(
-        Paragraph::new(Line::from(hints)).centered(),
-        content_area,
-    );
+    frame.render_widget(Paragraph::new(Line::from(hints)).centered(), content_area);
 }
 
 fn message_color(level: MessageLevel) -> Color {
