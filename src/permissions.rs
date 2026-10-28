@@ -6,17 +6,14 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
-use rusb::{DeviceHandle, Error as UsbError, GlobalContext};
+use anyhow::{Context, Result, bail};
 
-use crate::config::{config_dir, config_path};
-use crate::constants::{ps, KB_PID, KB_VID, PLATFORM_PROFILE};
+use crate::config::config_path;
+use crate::keyboard::{UsbAccess, keyboard_access};
+use crate::machine::MachineRoot;
 
 pub(crate) const HARDWARE_GROUP: &str = "arch-sense";
 
-const UDEV_RULE_PATH: &str = "/etc/udev/rules.d/70-arch-sense.rules";
-const PERMISSION_SERVICE_PATH: &str = "/etc/systemd/system/arch-sense-permissions.service";
-const INSTALLED_BINARY_PATH: &str = "/usr/bin/arch-sense";
 const ROOT_INSTALL_FLAG: &str = "--install-permissions-root";
 
 const SYSFS_ATTRS: &[&str] = &[
@@ -28,21 +25,6 @@ const SYSFS_ATTRS: &[&str] = &[
     "lcd_override",
     "usb_charging",
 ];
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum UsbAccess {
-    Accessible,
-    PermissionDenied,
-    NotFound,
-    Error(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum KeyboardOpenError {
-    PermissionDenied,
-    NotFound,
-    Other(String),
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PathAccess {
@@ -60,17 +42,17 @@ pub(crate) struct PermissionReport {
 }
 
 impl PermissionReport {
-    pub(crate) fn collect() -> Self {
+    pub(crate) fn collect(m: &MachineRoot) -> Self {
         Self {
-            is_root: is_root(),
-            sysfs: sysfs_write_paths()
+            is_root: is_root(m),
+            sysfs: sysfs_write_paths(m)
                 .into_iter()
                 .map(|path| {
                     let access = path_write_access(&path);
                     (path, access)
                 })
                 .collect(),
-            usb: keyboard_access(),
+            usb: keyboard_access(m),
         }
     }
 
@@ -90,73 +72,8 @@ pub(crate) fn setup_hint() -> &'static str {
     "run `arch-sense --install-permissions` once, then log out and back in if prompted"
 }
 
-pub(crate) fn keyboard_present() -> bool {
-    !matches!(keyboard_access(), UsbAccess::NotFound)
-}
-
-pub(crate) fn keyboard_access() -> UsbAccess {
-    match try_open_keyboard() {
-        Ok(_) => UsbAccess::Accessible,
-        Err(KeyboardOpenError::PermissionDenied) => UsbAccess::PermissionDenied,
-        Err(KeyboardOpenError::NotFound) => UsbAccess::NotFound,
-        Err(KeyboardOpenError::Other(err)) => UsbAccess::Error(err),
-    }
-}
-
-pub(crate) fn open_keyboard() -> Result<DeviceHandle<GlobalContext>> {
-    match try_open_keyboard() {
-        Ok(handle) => Ok(handle),
-        Err(KeyboardOpenError::PermissionDenied) => bail!(
-            "Keyboard USB access denied (VID:04F2 PID:0117); {}",
-            setup_hint()
-        ),
-        Err(KeyboardOpenError::NotFound) => bail!("Keyboard not found (VID:04F2 PID:0117)"),
-        Err(KeyboardOpenError::Other(err)) => {
-            bail!("Keyboard found but could not be opened: {err}")
-        }
-    }
-}
-
-fn try_open_keyboard() -> std::result::Result<DeviceHandle<GlobalContext>, KeyboardOpenError> {
-    let devices = rusb::devices().map_err(|e| KeyboardOpenError::Other(e.to_string()))?;
-    let mut found = false;
-    let mut access_denied = false;
-    let mut last_error = None;
-
-    for device in devices.iter() {
-        let desc = match device.device_descriptor() {
-            Ok(desc) => desc,
-            Err(err) => {
-                last_error = Some(err.to_string());
-                continue;
-            }
-        };
-
-        if desc.vendor_id() != KB_VID || desc.product_id() != KB_PID {
-            continue;
-        }
-
-        found = true;
-        match device.open() {
-            Ok(handle) => return Ok(handle),
-            Err(UsbError::Access) => access_denied = true,
-            Err(err) => last_error = Some(err.to_string()),
-        }
-    }
-
-    if access_denied {
-        Err(KeyboardOpenError::PermissionDenied)
-    } else if found {
-        Err(KeyboardOpenError::Other(
-            last_error.unwrap_or_else(|| "unknown USB error".to_string()),
-        ))
-    } else {
-        Err(KeyboardOpenError::NotFound)
-    }
-}
-
-pub fn print_permission_report() -> Result<()> {
-    let report = PermissionReport::collect();
+pub fn print_permission_report(m: &MachineRoot) -> Result<()> {
+    let report = PermissionReport::collect(m);
 
     println!("Arch-Sense permission report");
     println!(
@@ -166,7 +83,7 @@ pub fn print_permission_report() -> Result<()> {
     println!(
         "  Hardware group: {} ({})",
         HARDWARE_GROUP,
-        if group_exists(HARDWARE_GROUP) {
+        if group_exists(m, HARDWARE_GROUP) {
             "exists"
         } else {
             "missing"
@@ -179,7 +96,7 @@ pub fn print_permission_report() -> Result<()> {
         println!("    {}: {}", path.display(), path_access_label(access));
     }
 
-    println!("  Config path: {}", config_path().display());
+    println!("  Config path: {}", config_path(m).display());
 
     if report.has_limited_access() {
         println!();
@@ -189,38 +106,37 @@ pub fn print_permission_report() -> Result<()> {
     Ok(())
 }
 
-pub fn install_permissions() -> Result<()> {
-    if !is_root() {
+pub fn install_permissions(m: &MachineRoot) -> Result<()> {
+    if !is_root(m) {
         return reexec_install_permissions();
     }
 
-    install_permissions_as_root()
+    install_permissions_as_root(m)
 }
 
-pub fn install_permissions_as_root() -> Result<()> {
-    if !is_root() {
+pub fn install_permissions_as_root(m: &MachineRoot) -> Result<()> {
+    if !is_root(m) {
         bail!(
             "--install-permissions-root must run as root; use `arch-sense --install-permissions`"
         );
     }
 
-    ensure_group()?;
+    ensure_group(m)?;
 
-    let target_user = invoking_user();
+    let target_user = invoking_user(m);
     let user_added = if let Some(user) = target_user.as_deref() {
-        ensure_user_in_group(user)?
+        ensure_user_in_group(m, user)?
     } else {
         false
     };
 
-    let binary = service_binary_path();
-    write_root_file(Path::new(UDEV_RULE_PATH), &udev_rules(&binary))?;
-    write_root_file(
-        Path::new(PERMISSION_SERVICE_PATH),
-        &permission_service(&binary),
-    )?;
+    let binary = service_binary_path(m);
+    let udev_rule = m.udev_rule();
+    let permission_service_path = m.permission_service();
+    write_root_file(&udev_rule, &udev_rules(&binary))?;
+    write_root_file(&permission_service_path, &permission_service(&binary))?;
 
-    apply_permissions_as_root()?;
+    apply_permissions_as_root(m)?;
 
     warn_command("udevadm", ["control", "--reload-rules"]);
     warn_command(
@@ -239,8 +155,11 @@ pub fn install_permissions_as_root() -> Result<()> {
     );
 
     println!("arch-sense: installed rootless hardware permissions");
-    println!("arch-sense: udev rules: {UDEV_RULE_PATH}");
-    println!("arch-sense: permission service: {PERMISSION_SERVICE_PATH}");
+    println!("arch-sense: udev rules: {}", udev_rule.display());
+    println!(
+        "arch-sense: permission service: {}",
+        permission_service_path.display()
+    );
 
     if let Some(user) = target_user {
         if user_added {
@@ -257,14 +176,14 @@ pub fn install_permissions_as_root() -> Result<()> {
     Ok(())
 }
 
-pub fn apply_permissions_as_root() -> Result<()> {
-    if !is_root() {
+pub fn apply_permissions_as_root(m: &MachineRoot) -> Result<()> {
+    if !is_root(m) {
         bail!("--apply-permissions must run as root; use `arch-sense --install-permissions`");
     }
 
-    ensure_group()?;
+    ensure_group(m)?;
 
-    let existing_paths: Vec<PathBuf> = sysfs_write_paths()
+    let existing_paths: Vec<PathBuf> = sysfs_write_paths(m)
         .into_iter()
         .filter(|path| path.exists())
         .collect();
@@ -288,7 +207,7 @@ pub fn apply_permissions_as_root() -> Result<()> {
         )?;
     }
 
-    let dir = config_dir();
+    let dir = m.state_dir();
     fs::create_dir_all(&dir)
         .with_context(|| format!("creating config directory {}", dir.display()))?;
     run_command(
@@ -301,7 +220,7 @@ pub fn apply_permissions_as_root() -> Result<()> {
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o2775))
         .with_context(|| format!("setting permissions on {}", dir.display()))?;
 
-    let config = config_path();
+    let config = config_path(m);
     if config.exists() {
         run_command(
             "chgrp",
@@ -343,7 +262,9 @@ fn reexec_install_permissions() -> Result<()> {
                 .context("failed to execute sudo")?;
 
             if !status.success() {
-                bail!("elevation failed via both pkexec and sudo; manually run `sudo arch-sense --install-permissions`")
+                bail!(
+                    "elevation failed via both pkexec and sudo; manually run `sudo arch-sense --install-permissions`"
+                )
             }
         }
     }
@@ -351,10 +272,10 @@ fn reexec_install_permissions() -> Result<()> {
     Ok(())
 }
 
-fn sysfs_write_paths() -> Vec<PathBuf> {
+fn sysfs_write_paths(m: &MachineRoot) -> Vec<PathBuf> {
     let mut paths = Vec::with_capacity(SYSFS_ATTRS.len() + 1);
-    paths.push(PathBuf::from(PLATFORM_PROFILE));
-    paths.extend(SYSFS_ATTRS.iter().map(|attr| PathBuf::from(ps(attr))));
+    paths.push(m.platform_profile());
+    paths.extend(SYSFS_ATTRS.iter().map(|attr| m.predator_sense_attr(attr)));
     paths
 }
 
@@ -367,18 +288,18 @@ fn path_write_access(path: &Path) -> PathAccess {
     }
 }
 
-fn effective_uid() -> Option<u32> {
-    let status = fs::read_to_string("/proc/self/status").ok()?;
+fn effective_uid(m: &MachineRoot) -> Option<u32> {
+    let status = fs::read_to_string(m.proc_self_status()).ok()?;
     let uid_line = status.lines().find(|line| line.starts_with("Uid:"))?;
     uid_line.split_whitespace().nth(2)?.parse().ok()
 }
 
-fn is_root() -> bool {
-    effective_uid() == Some(0)
+fn is_root(m: &MachineRoot) -> bool {
+    effective_uid(m) == Some(0)
 }
 
-fn group_exists(group: &str) -> bool {
-    fs::read_to_string("/etc/group")
+fn group_exists(m: &MachineRoot, group: &str) -> bool {
+    fs::read_to_string(m.etc_group())
         .ok()
         .map(|groups| {
             groups.lines().any(|line| {
@@ -391,27 +312,27 @@ fn group_exists(group: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn ensure_group() -> Result<()> {
-    if group_exists(HARDWARE_GROUP) {
+fn ensure_group(m: &MachineRoot) -> Result<()> {
+    if group_exists(m, HARDWARE_GROUP) {
         return Ok(());
     }
 
     run_command("groupadd", ["--system", HARDWARE_GROUP])
 }
 
-fn invoking_user() -> Option<String> {
+fn invoking_user(m: &MachineRoot) -> Option<String> {
     env::var("SUDO_USER")
         .ok()
         .filter(|user| !user.is_empty() && user != "root")
         .or_else(|| {
             env::var("PKEXEC_UID")
                 .ok()
-                .and_then(|uid| user_from_uid(&uid))
+                .and_then(|uid| user_from_uid(m, &uid))
         })
 }
 
-fn user_from_uid(uid: &str) -> Option<String> {
-    fs::read_to_string("/etc/passwd")
+fn user_from_uid(m: &MachineRoot, uid: &str) -> Option<String> {
+    fs::read_to_string(m.etc_passwd())
         .ok()?
         .lines()
         .find_map(|line| {
@@ -428,8 +349,8 @@ fn user_from_uid(uid: &str) -> Option<String> {
         .filter(|user| !user.is_empty() && user != "root")
 }
 
-fn ensure_user_in_group(user: &str) -> Result<bool> {
-    if user_in_group(user, HARDWARE_GROUP) {
+fn ensure_user_in_group(m: &MachineRoot, user: &str) -> Result<bool> {
+    if user_in_group(m, user, HARDWARE_GROUP) {
         return Ok(false);
     }
 
@@ -437,8 +358,8 @@ fn ensure_user_in_group(user: &str) -> Result<bool> {
     Ok(true)
 }
 
-fn user_in_group(user: &str, group: &str) -> bool {
-    fs::read_to_string("/etc/group")
+fn user_in_group(m: &MachineRoot, user: &str, group: &str) -> bool {
+    fs::read_to_string(m.etc_group())
         .ok()
         .and_then(|groups| {
             groups.lines().find_map(|line| {
@@ -457,8 +378,8 @@ fn user_in_group(user: &str, group: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn service_binary_path() -> PathBuf {
-    let installed = PathBuf::from(INSTALLED_BINARY_PATH);
+fn service_binary_path(m: &MachineRoot) -> PathBuf {
+    let installed = m.installed_binary();
     if installed.exists() {
         installed
     } else {
