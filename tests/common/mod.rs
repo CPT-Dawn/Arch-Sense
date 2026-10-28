@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use arch_sense::app::App;
 use arch_sense::fixture::FakeMachine;
 use arch_sense::keyboard::KeyboardTransport;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -57,6 +57,60 @@ impl Harness {
 
     pub fn press_with(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         self.app.handle_key(KeyEvent::new(code, modifiers));
+    }
+
+    fn mouse(&mut self, kind: MouseEventKind, column: u16, row: u16) {
+        // Render first: clicks land on what the last frame drew.
+        self.frame();
+        self.app.handle_mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    pub fn click(&mut self, column: u16, row: u16) {
+        self.mouse(MouseEventKind::Down(MouseButton::Left), column, row);
+    }
+
+    pub fn right_click(&mut self, column: u16, row: u16) {
+        self.mouse(MouseEventKind::Down(MouseButton::Right), column, row);
+    }
+
+    pub fn scroll_down(&mut self, column: u16, row: u16) {
+        self.mouse(MouseEventKind::ScrollDown, column, row);
+    }
+
+    pub fn scroll_up(&mut self, column: u16, row: u16) {
+        self.mouse(MouseEventKind::ScrollUp, column, row);
+    }
+
+    /// Where `needle` first appears on screen, as (column, row).
+    pub fn find(&mut self, needle: &str) -> Option<(u16, u16)> {
+        let screen = self.screen();
+        screen.lines().enumerate().find_map(|(y, line)| {
+            line.find(needle)
+                .map(|byte| (line[..byte].chars().count() as u16, y as u16))
+        })
+    }
+
+    /// Where the label of the settings row `label` starts.
+    pub fn label_position(&mut self, label: &str) -> Option<(u16, u16)> {
+        let buffer = self.frame();
+        let y = (0..buffer.area.height)
+            .find(|&y| setting_label(&buffer, y).is_some_and(|(found, _)| found == label))?;
+        Some((LABEL_COLUMN, y))
+    }
+
+    /// Where `needle` appears on the settings row labelled `label`.
+    pub fn find_in_row(&mut self, label: &str, needle: &str) -> Option<(u16, u16)> {
+        let buffer = self.frame();
+        let y = (0..buffer.area.height)
+            .find(|&y| setting_label(&buffer, y).is_some_and(|(found, _)| found == label))?;
+        let line = row_text(&buffer, y, LABEL_END, buffer.area.width);
+        let byte = line.find(needle)?;
+        Some((LABEL_END + line[..byte].chars().count() as u16, y))
     }
 
     /// Presses `code` `times` times.
