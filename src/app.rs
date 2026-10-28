@@ -6,6 +6,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 
 use ratatui::Frame;
 
+use crate::capabilities::{Laptop, SenseInterface};
 use crate::config::AppConfig;
 use crate::hardware::{HardwareEvent, HardwareHandle, HardwareRequest, spawn_worker};
 use crate::keyboard::{KeyboardTransport, UsbAccess};
@@ -153,7 +154,8 @@ pub struct App {
     pub(crate) rgb: RgbSettings,
     pub(crate) selected_rgb_field: usize,
     pub(crate) sensors: SensorsState,
-    pub(crate) module_loaded: bool,
+    /// What the last hardware scan detected; `None` until the first scan lands.
+    pub(crate) laptop: Option<Laptop>,
     pub(crate) keyboard: UsbAccess,
     pub(crate) message: StatusMessage,
     pub(crate) hardware_note: Option<String>,
@@ -186,7 +188,7 @@ impl App {
             rgb,
             selected_rgb_field: 0,
             sensors: SensorsState::new(),
-            module_loaded: false,
+            laptop: None,
             keyboard: UsbAccess::NotFound,
             message: StatusMessage {
                 level: MessageLevel::Info,
@@ -273,7 +275,7 @@ impl App {
                 HardwareEvent::Snapshot(snapshot) => {
                     let snapshot = *snapshot;
                     self.snapshot_pending = false;
-                    self.module_loaded = snapshot.module_loaded;
+                    self.laptop = Some(snapshot.laptop);
                     self.keyboard = snapshot.keyboard;
                     self.hardware_note = snapshot.note;
                     self.sensors.update(&snapshot.sensors);
@@ -560,6 +562,13 @@ impl App {
 
     pub(crate) fn selected_control(&self) -> Option<&ControlItem> {
         self.controls.get(self.selected_control)
+    }
+
+    /// Whether Linuwu-Sense is loaded with a Sense Interface for this laptop.
+    pub(crate) fn module_loaded(&self) -> bool {
+        self.laptop
+            .as_ref()
+            .is_some_and(|laptop| laptop.sense_interface != SenseInterface::None)
     }
 }
 

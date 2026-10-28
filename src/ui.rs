@@ -174,8 +174,13 @@ fn draw_controls(frame: &mut Frame, area: Rect, app: &App) {
         .split(inner)[0];
 
     if app.controls.is_empty() {
+        let text = if app.laptop.is_some() {
+            " No hardware controls detected"
+        } else {
+            " Waiting for hardware controls..."
+        };
         frame.render_widget(
-            Paragraph::new(" Waiting for hardware controls...")
+            Paragraph::new(text)
                 .style(Style::new().fg(Theme::TEXT_SECONDARY))
                 .alignment(Alignment::Center),
             content_area,
@@ -668,7 +673,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     hints.push(Span::styled("  │  ", Style::new().fg(Theme::BORDER_IDLE)));
 
     // Determine system status: prioritize hardware errors over message logs
-    let (status_color, status_text) = if !app.module_loaded {
+    let (status_color, status_text) = if !app.module_loaded() {
         (Theme::STATE_ERROR, "Kernel Module Missing")
     } else {
         match &app.keyboard {
