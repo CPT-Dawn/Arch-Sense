@@ -8,6 +8,10 @@ use clap::Parser;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.demo {
+        return arch_sense::demo::run();
+    }
+
     let machine = MachineRoot::system();
 
     if cli.command == Some(Command::Doctor) {
