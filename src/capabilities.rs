@@ -41,21 +41,22 @@ pub enum Capability {
     ThermalProfile,
     Fans,
     ChargeLimit,
-    BatteryCalibration,
     UsbCharging,
+    BatteryCalibration,
     BootAnimation,
     LcdOverdrive,
     BacklightTimeout,
 }
 
 impl Capability {
-    /// Every Capability, in the order the UI lists them.
+    /// Every Capability, in the order the UI lists them. The settings list
+    /// takes its order from here; nothing else spells it out.
     pub const ALL: [Self; 8] = [
         Self::ThermalProfile,
         Self::Fans,
         Self::ChargeLimit,
-        Self::BatteryCalibration,
         Self::UsbCharging,
+        Self::BatteryCalibration,
         Self::BootAnimation,
         Self::LcdOverdrive,
         Self::BacklightTimeout,
@@ -85,6 +86,38 @@ impl Capability {
     }
 }
 
+/// A Thermal Profile the firmware offers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThermalProfile(String);
+
+impl ThermalProfile {
+    /// The firmware's name for it, verbatim (e.g. `balanced-performance`): what
+    /// `platform_profile` reads and takes.
+    pub fn name(&self) -> &str {
+        &self.0
+    }
+
+    /// The name as people say it, e.g. "Balanced Performance".
+    pub fn label(&self) -> String {
+        self.0
+            .split('-')
+            .map(|word| {
+                let mut chars = word.chars();
+                chars.next().map_or_else(String::new, |first| {
+                    first.to_uppercase().chain(chars).collect()
+                })
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+impl PartialEq<&str> for ThermalProfile {
+    fn eq(&self, name: &&str) -> bool {
+        self.0 == *name
+    }
+}
+
 /// The read-only Turbo indicator: whether the Turbo key has engaged turbo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Turbo {
@@ -96,9 +129,9 @@ pub enum Turbo {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Laptop {
     pub sense_interface: SenseInterface,
-    /// The Thermal Profiles the firmware offers, verbatim and in its order
-    /// (e.g. `balanced-performance`). Empty when there is no Thermal Profile.
-    pub thermal_profiles: Vec<String>,
+    /// The Thermal Profiles the firmware offers, in its order. Empty when
+    /// there is no Thermal Profile.
+    pub thermal_profiles: Vec<ThermalProfile>,
     /// The Turbo indicator, when the laptop has a Turbo key that reads.
     pub turbo: Option<Turbo>,
     capabilities: Vec<Capability>,
@@ -122,9 +155,14 @@ pub fn detect(machine: &MachineRoot) -> Laptop {
         .find(|interface| interface.dir(machine).is_some_and(|dir| dir.is_dir()))
         .unwrap_or(SenseInterface::None);
 
-    let thermal_profiles: Vec<String> = read(machine.platform_profile())
+    let thermal_profiles: Vec<ThermalProfile> = read(machine.platform_profile())
         .and_then(|_| read(machine.platform_profile_choices()))
-        .map(|choices| choices.split_whitespace().map(str::to_owned).collect())
+        .map(|choices| {
+            choices
+                .split_whitespace()
+                .map(|name| ThermalProfile(name.to_owned()))
+                .collect()
+        })
         .unwrap_or_default();
 
     let capabilities = Capability::ALL

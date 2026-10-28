@@ -21,7 +21,7 @@ fn main() -> Result<()> {
     }
 
     if cli.apply {
-        return commands::apply_saved_config(&machine, &mut RusbTransport);
+        return commands::apply_saved_lighting(&machine, &mut RusbTransport);
     }
 
     arch_sense::run(machine, RusbTransport)

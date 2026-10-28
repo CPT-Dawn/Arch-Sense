@@ -5,11 +5,11 @@ use clap::{Parser, Subcommand};
     name = "arch-sense",
     author,
     version,
-    about = "Acer Predator hardware control center",
-    long_about = "A modern TUI and CLI tool for managing Acer Predator hardware on Arch Linux, including keyboard RGB, thermal profiles, fan speeds, and battery health settings."
+    about = "Terminal control center for Acer Predator and Nitro laptops, via Linuwu-Sense",
+    long_about = "Terminal control center for Acer Predator and Nitro laptops, built on the Linuwu-Sense kernel module: Thermal Profile, Fans (Auto or Max), battery care, keyboard lighting and the other controls your laptop exposes."
 )]
 pub struct Cli {
-    /// Apply saved RGB settings without launching the TUI
+    /// Boot Restore: reapply the Saved Lighting without launching the TUI
     #[arg(long)]
     pub apply: bool,
 

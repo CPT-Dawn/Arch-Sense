@@ -24,6 +24,9 @@ fn d_opens_the_doctor_with_the_same_checks_as_the_cli_and_esc_closes_it() {
     assert!(!app.screen().contains("Doctor"));
 
     app.press(KeyCode::Char('d'));
+    app.wait_until("the Doctor's checks", |app| {
+        app.screen().contains("Log out and back in")
+    });
     let screen = app.screen();
 
     assert!(screen.contains("Doctor"), "{screen}");
@@ -53,8 +56,10 @@ fn the_doctor_overlay_fits_a_small_terminal_and_scrolls() {
     app.wait_for_scan();
 
     app.press(KeyCode::Char('d'));
+    app.wait_until("the Doctor's checks", |app| {
+        app.screen().contains("✗ Kernel module")
+    });
     let first = app.screen();
-    assert!(first.contains("✗ Kernel module"), "{first}");
     assert!(
         !first.contains("v1 leftovers"),
         "everything fits in 24 lines?\n{first}"
@@ -63,4 +68,43 @@ fn the_doctor_overlay_fits_a_small_terminal_and_scrolls() {
     app.press_n(KeyCode::Down, 40);
     let scrolled = app.screen();
     assert!(scrolled.contains("v1 leftovers"), "{scrolled}");
+}
+
+#[test]
+fn the_doctor_runs_off_the_ui_thread_and_says_so_until_it_is_done() {
+    let fake = FakeMachine::builder()
+        .healthy_ph16_71()
+        .build()
+        .expect("fake machine");
+    let mut app = Harness::start(&fake, RecordingTransport::default());
+    app.wait_for_scan();
+
+    app.press(KeyCode::Char('d'));
+    let pending = app.screen_untouched();
+    assert!(pending.contains("Running checks…"), "{pending}");
+    assert!(!pending.contains("✓ Kernel module"), "{pending}");
+
+    app.wait_until("the Doctor's checks", |app| {
+        app.screen().contains("✓ Kernel module")
+    });
+    assert!(!app.screen().contains("Running checks…"));
+}
+
+#[test]
+fn a_doctor_result_that_lands_after_the_overlay_closed_stays_closed() {
+    let fake = FakeMachine::builder()
+        .healthy_ph16_71()
+        .build()
+        .expect("fake machine");
+    let mut app = Harness::start(&fake, RecordingTransport::default());
+    app.wait_for_scan();
+
+    app.press(KeyCode::Char('d'));
+    app.press(KeyCode::Esc);
+    // Give the worker ample time to finish the diagnosis it was asked for.
+    for _ in 0..20 {
+        assert!(!app.screen().contains("Doctor"), "{}", app.screen());
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.is_running());
 }

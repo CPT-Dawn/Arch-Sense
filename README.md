@@ -66,7 +66,7 @@ you don't have them yet):
 paru -S arch-sense
 ```
 
-**2. Join the `arch-sense` group**, which is what lets you change settings without sudo:
+**2. Join the `arch-sense` group**, which is what lets Arch-Sense drive the hardware without sudo:
 
 ```bash
 sudo usermod -aG arch-sense $USER
@@ -202,7 +202,7 @@ sudo groupdel arch-sense
 
 ### I'm upgrading from v1. Anything to do?
 
-Mostly no. Your keyboard settings carry over to Saved Lighting automatically on first
+Mostly no. Your keyboard lighting carries over to Saved Lighting automatically on first
 run. Three things changed:
 
 - **Permissions are the package's job now.** v1's self-installing permission
@@ -214,8 +214,9 @@ run. Three things changed:
   sudo rm -f /etc/udev/rules.d/70-arch-sense.rules /etc/systemd/system/arch-sense-permissions.service
   ```
 
-- **Boot Restore is opt-in.** If you relied on lighting coming back at boot, enable it
-  as [shown above](#optional-boot-restore).
+- **Boot Restore is opt-in.** v1 switched it on for you; the upgrade switches it off
+  again. If you relied on lighting coming back at boot, enable it as
+  [shown above](#optional-boot-restore).
 - **The kernel module comes from the AUR.** If you built Linuwu-Sense by hand with
   `make install`, Arch-Sense still works with it, but you no longer need to maintain it
   yourself.

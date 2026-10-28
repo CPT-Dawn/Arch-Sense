@@ -1,6 +1,6 @@
 use std::fs;
 
-use arch_sense::commands::apply_saved_config;
+use arch_sense::commands::apply_saved_lighting;
 use arch_sense::fixture::FakeMachine;
 use arch_sense::keyboard::RecordingTransport;
 
@@ -21,7 +21,7 @@ fn apply_sends_the_saved_lighting_to_the_keyboard() {
     .unwrap();
     let mut keyboard = RecordingTransport::default();
 
-    apply_saved_config(&fake.machine(), &mut keyboard).expect("apply succeeds");
+    apply_saved_lighting(&fake.machine(), &mut keyboard).expect("apply succeeds");
 
     assert_eq!(
         keyboard.sent(),
@@ -40,7 +40,7 @@ fn apply_without_a_keyboard_quietly_does_nothing() {
         .expect("fake machine");
     let mut keyboard = RecordingTransport::default();
 
-    apply_saved_config(&fake.machine(), &mut keyboard).expect("apply succeeds");
+    apply_saved_lighting(&fake.machine(), &mut keyboard).expect("apply succeeds");
 
     assert!(keyboard.sent().is_empty());
 }
@@ -68,7 +68,7 @@ fn apply_restores_per_zone_colours_on_a_four_zone_keyboard() {
     saved::save(&fake.machine(), &lighting).unwrap();
     let mut keyboard = RecordingTransport::default();
 
-    apply_saved_config(&fake.machine(), &mut keyboard).expect("apply succeeds");
+    apply_saved_lighting(&fake.machine(), &mut keyboard).expect("apply succeeds");
 
     let per_zone = fake.machine().four_zone_kb_dir().join("per_zone_mode");
     assert_eq!(
@@ -119,7 +119,7 @@ fn boot_restore_matches_applying_in_the_ui_on_usb_hid() {
     let boot = build();
     saved::save(&boot.machine(), &lighting).unwrap();
     let mut boot_keyboard = RecordingTransport::default();
-    apply_saved_config(&boot.machine(), &mut boot_keyboard).unwrap();
+    apply_saved_lighting(&boot.machine(), &mut boot_keyboard).unwrap();
 
     assert!(!ui_keyboard.sent().is_empty());
     assert_eq!(boot_keyboard.sent(), ui_keyboard.sent());
@@ -150,7 +150,7 @@ fn boot_restore_matches_applying_in_the_ui_on_four_zone() {
 
     let boot = build();
     saved::save(&boot.machine(), &lighting).unwrap();
-    apply_saved_config(&boot.machine(), &mut RecordingTransport::default()).unwrap();
+    apply_saved_lighting(&boot.machine(), &mut RecordingTransport::default()).unwrap();
 
     assert_eq!(four_zone_files(&boot), four_zone_files(&ui));
     let untouched = build();
@@ -171,7 +171,7 @@ fn boot_restore_with_nothing_saved_writes_nothing() {
         let before = four_zone.then(|| four_zone_files(&fake));
         let mut keyboard = RecordingTransport::default();
 
-        apply_saved_config(&fake.machine(), &mut keyboard).expect("apply succeeds");
+        apply_saved_lighting(&fake.machine(), &mut keyboard).expect("apply succeeds");
 
         assert!(keyboard.sent().is_empty());
         assert_eq!(four_zone.then(|| four_zone_files(&fake)), before);
@@ -192,7 +192,7 @@ fn boot_restore_survives_a_corrupt_saved_lighting_file() {
     fs::write(&path, "{ this is not json").unwrap();
     let mut keyboard = RecordingTransport::default();
 
-    apply_saved_config(&fake.machine(), &mut keyboard)
+    apply_saved_lighting(&fake.machine(), &mut keyboard)
         .expect("a corrupt file must not turn boot red");
 
     assert!(keyboard.sent().is_empty());

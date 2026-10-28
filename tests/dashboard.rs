@@ -5,8 +5,10 @@ mod common;
 use std::fs;
 use std::path::Path;
 
+use arch_sense::doctor::Membership;
 use arch_sense::fixture::{FakeMachine, FakeMachineBuilder};
 use arch_sense::keyboard::RecordingTransport;
+use arch_sense::machine::MachineRoot;
 use crossterm::event::KeyCode;
 
 use common::Harness;
@@ -107,13 +109,7 @@ fn enter_flips_a_switch() {
 
 /// Root writes through read-only files, so permission tests can't fail there.
 fn running_as_root() -> bool {
-    fs::read_to_string("/proc/self/status").is_ok_and(|status| {
-        status
-            .lines()
-            .find(|line| line.starts_with("Uid:"))
-            .and_then(|line| line.split_whitespace().nth(2))
-            == Some("0")
-    })
+    Membership::current(&MachineRoot::system()) == Membership::Root
 }
 
 #[test]
