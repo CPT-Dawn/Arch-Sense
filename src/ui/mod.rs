@@ -4,6 +4,7 @@
 //! - [`cards`]: CPU, GPU, Fans and Battery gauge cards;
 //! - [`list`]: the scrollable settings list, grouped by section;
 //! - [`preview`]: the keyboard preview, pinned below the list while a Lighting row is selected;
+//! - [`unsupported`]: in its place, the "not supported yet" panel for a keyboard we can't drive;
 //! - [`footer`]: status on the left, key hints on the right;
 //! - [`overlay`]: any modal, drawn over everything.
 //!
@@ -17,11 +18,13 @@ mod header;
 mod list;
 mod overlay;
 mod preview;
+mod unsupported;
 
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
 use crate::app::App;
+use crate::lighting::Detection;
 use crate::settings::Section;
 use crate::theme::Theme;
 
@@ -66,6 +69,8 @@ fn draw_dashboard(frame: &mut Frame, app: &App) {
 fn pinned_height(app: &App) -> u16 {
     if preview_shown(app) {
         preview::HEIGHT
+    } else if unsupported_keyboard(app) {
+        unsupported::HEIGHT
     } else {
         0
     }
@@ -76,8 +81,16 @@ fn preview_shown(app: &App) -> bool {
         && app.selected_id().map(|id| id.section()) == Some(Section::Lighting)
 }
 
+fn unsupported_keyboard(app: &App) -> bool {
+    app.scanned() && matches!(app.detection, Detection::Unsupported(_))
+}
+
 fn draw_pinned(frame: &mut Frame, area: Rect, app: &App) {
-    if let Some(lighting) = &app.settings.lighting
+    if let Detection::Unsupported(keyboard) = app.detection
+        && unsupported_keyboard(app)
+    {
+        unsupported::draw(frame, area, keyboard);
+    } else if let Some(lighting) = &app.settings.lighting
         && preview_shown(app)
     {
         preview::draw(frame, area.inner(Margin::new(2, 0)), lighting, app.clock);

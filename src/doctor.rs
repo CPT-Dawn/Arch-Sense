@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use crate::capabilities::{self, SenseInterface};
 use crate::keyboard::{USB_HID_PRODUCT_ID, USB_HID_VENDOR_ID, UsbAccess, keyboard_access};
+use crate::lighting::{self, CONTRIBUTING_URL, Detection, LightingBackend};
 use crate::machine::MachineRoot;
 
 const MODULE: &str = "linuwu_sense";
@@ -27,8 +28,6 @@ const MODULE_LOCATIONS: [&str; 4] = [
 ];
 /// The ENE KB5130 keyboard of 2025+ models, as hidraw names it.
 const ENE_KB5130_ID: &str = "00000CF2:00005130";
-/// Keyboards known to exist on Linuwu-Sense laptops that no Lighting Backend drives yet.
-const UNSUPPORTED_KEYBOARDS: [(u16, u16, &str); 1] = [(0x05af, 0x666a, "Jing-Mold (PH16-72)")];
 const NEW_ISSUE: &str = "https://github.com/CPT-Dawn/Arch-Sense/issues/new";
 const UPSTREAM_ISSUES: &str = "https://github.com/0x7375646F/Linuwu-Sense/issues";
 const ENE_NOTE: &str =
@@ -501,52 +500,49 @@ fn lighting(machine: &MachineRoot) -> Check {
             format!("A known limitation of 2025+ models, not your setup; see {ENE_NOTE}"),
         );
     }
-    match keyboard_access(machine) {
-        UsbAccess::Accessible => {
-            return Check::ok(
-                NAME,
-                format!("USB HID ({USB_HID_VENDOR_ID:04x}:{USB_HID_PRODUCT_ID:04x})"),
-            );
-        }
-        UsbAccess::PermissionDenied => {
-            return Check::not_ok(
-                NAME,
-                Status::Warn,
-                "USB HID keyboard found, but it can't be opened",
-                "Fix Permissions above, then `sudo udevadm trigger` (or reboot)",
-            );
-        }
-        UsbAccess::Error(error) => {
-            return Check::not_ok(
-                NAME,
-                Status::Warn,
-                format!("USB HID keyboard: {error}"),
-                format!("Report it at {NEW_ISSUE} with this output"),
-            );
-        }
-        UsbAccess::NotFound => {}
-    }
-    if machine.four_zone_kb_dir().is_dir() {
-        return Check::ok(NAME, "Four-Zone");
-    }
-    if let Some((vendor, product, name)) = unsupported_keyboard(machine) {
-        return Check::not_ok(
+    match lighting::detect(machine) {
+        Detection::Backend(LightingBackend::FourZone) => Check::ok(NAME, "Four-Zone"),
+        Detection::Backend(LightingBackend::UsbHid) => usb_hid_lighting(machine),
+        Detection::Unsupported(keyboard) => Check::not_ok(
             NAME,
             Status::Warn,
-            format!("{name} keyboard {vendor:04x}:{product:04x} isn't supported yet"),
+            format!("{keyboard} keyboard isn't supported yet"),
             format!(
-                "Help add it: open an issue at {NEW_ISSUE} with USB captures of the vendor software changing colours"
+                "Help add it: share USB captures of the vendor software changing colours, as described at {CONTRIBUTING_URL} (or open an issue at {NEW_ISSUE})"
             ),
-        );
-    }
-    Check::not_ok(
-        NAME,
-        Status::Info,
-        "no RGB keyboard found",
-        format!(
-            "If your keyboard has RGB lighting, open an issue at {NEW_ISSUE} with your `lsusb` output"
         ),
-    )
+        Detection::None => Check::not_ok(
+            NAME,
+            Status::Info,
+            "no RGB keyboard found",
+            format!(
+                "If your keyboard has RGB lighting, open an issue at {NEW_ISSUE} with your `lsusb` output"
+            ),
+        ),
+    }
+}
+
+/// The USB HID backend is only as good as our access to the keyboard.
+fn usb_hid_lighting(machine: &MachineRoot) -> Check {
+    const NAME: &str = "Lighting Backend";
+    match keyboard_access(machine) {
+        UsbAccess::Accessible | UsbAccess::NotFound => Check::ok(
+            NAME,
+            format!("USB HID ({USB_HID_VENDOR_ID:04x}:{USB_HID_PRODUCT_ID:04x})"),
+        ),
+        UsbAccess::PermissionDenied => Check::not_ok(
+            NAME,
+            Status::Warn,
+            "USB HID keyboard found, but it can't be opened",
+            "Fix Permissions above, then `sudo udevadm trigger` (or reboot)",
+        ),
+        UsbAccess::Error(error) => Check::not_ok(
+            NAME,
+            Status::Warn,
+            format!("USB HID keyboard: {error}"),
+            format!("Report it at {NEW_ISSUE} with this output"),
+        ),
+    }
 }
 
 fn has_ene_kb5130(machine: &MachineRoot) -> bool {
@@ -555,20 +551,6 @@ fn has_ene_kb5130(machine: &MachineRoot) -> bool {
             uevent.to_ascii_uppercase().contains(ENE_KB5130_ID) || uevent.contains("ENEK5130")
         })
     })
-}
-
-fn unsupported_keyboard(machine: &MachineRoot) -> Option<(u16, u16, &'static str)> {
-    let id = |device: &Path, attr: &str| {
-        read(device.join(attr)).and_then(|v| u16::from_str_radix(v.trim(), 16).ok())
-    };
-    subdirs(&machine.usb_devices_dir())
-        .iter()
-        .find_map(|device| {
-            let (vendor, product) = (id(device, "idVendor")?, id(device, "idProduct")?);
-            UNSUPPORTED_KEYBOARDS
-                .into_iter()
-                .find(|&(v, p, _)| (v, p) == (vendor, product))
-        })
 }
 
 fn boot_restore(machine: &MachineRoot) -> Check {
