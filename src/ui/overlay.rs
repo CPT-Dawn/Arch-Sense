@@ -11,6 +11,9 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
     match &app.overlay {
         None => {}
         Some(Overlay::ConfirmCalibration) => confirm_calibration(frame, area),
+        Some(Overlay::Doctor { report, scroll }) => {
+            super::doctor::draw(frame, area, report, *scroll)
+        }
         Some(Overlay::Help) => help(frame, area),
     }
 }

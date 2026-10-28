@@ -4,6 +4,7 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod constants;
+pub mod doctor;
 pub mod fixture;
 pub mod hardware;
 pub mod keyboard;
