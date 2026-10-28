@@ -15,17 +15,13 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green?style=flat-square"></a>
 </p>
 
-<p align="center">
-  <img alt="Arch-Sense running in demo mode" src="docs/demo.gif" width="900">
-</p>
-
 Arch-Sense shows what your laptop is up to (CPU and GPU temperatures, fan speeds,
 battery) and lets you change what it can: Thermal Profile, fans, charge limit, USB
 charging, boot animation, LCD overdrive and keyboard lighting. It only shows the
 controls your laptop actually has, so nothing on screen is a decoy.
 
 Want a look before installing anything? `arch-sense --demo` runs the whole UI on a
-simulated laptop and touches nothing real. That's what the GIF above is.
+simulated laptop and touches nothing real.
 
 ---
 
@@ -242,8 +238,15 @@ run. Three things changed:
   make uninstall
   ```
 
-  No checkout any more? `sudo dkms remove linuwu_sense/1.0 --all && sudo rm -rf /usr/src/linuwu_sense-1.0`
-  does the part that matters (check `dkms status` for your version).
+  No checkout any more? This does the same (check `dkms status` for your version):
+
+  ```bash
+  sudo systemctl disable --now linuwu_sense.service
+  sudo dkms remove linuwu_sense/1.0 --all
+  sudo rm -rf /usr/src/linuwu_sense-1.0
+  sudo rm -f /etc/systemd/system/linuwu_sense.service /etc/modules-load.d/linuwu_sense.conf \
+    /etc/modprobe.d/blacklist-acer_wmi.conf /etc/tmpfiles.d/linuwu_sense.conf
+  ```
 
 ---
 
@@ -287,8 +290,8 @@ never touch your machine. The vocabulary lives in [GLOSSARY.md](GLOSSARY.md) and
 bigger decisions in [docs/adr](docs/adr). The AUR packages are in
 [packaging/aur](packaging/aur).
 
-The demo GIF is recorded with [VHS](https://github.com/charmbracelet/vhs) from
-[docs/demo.tape](docs/demo.tape): `cargo build --release && vhs docs/demo.tape`.
+[docs/demo.tape](docs/demo.tape) films the demo laptop with
+[VHS](https://github.com/charmbracelet/vhs): `cargo build --release && vhs docs/demo.tape`.
 
 ---
 
