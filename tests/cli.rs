@@ -19,6 +19,24 @@ fn the_pkexec_self_installer_flags_are_gone() {
 }
 
 #[test]
+fn help_describes_what_arch_sense_actually_drives() {
+    use clap::CommandFactory;
+    let help = Cli::command().render_long_help().to_string();
+
+    for words in [
+        "Acer Predator and Nitro",
+        "Linuwu-Sense",
+        "Fans (Auto or Max)",
+        "Boot Restore",
+        "Saved Lighting",
+    ] {
+        assert!(help.contains(words), "{words:?} missing from\n{help}");
+    }
+    assert!(!help.contains("fan speeds"), "{help}");
+    assert!(!help.contains("RGB settings"), "{help}");
+}
+
+#[test]
 fn boot_restore_keeps_its_flag() {
     assert!(Cli::try_parse_from(["arch-sense", "--apply"]).is_ok());
 }
