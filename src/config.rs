@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::constants::setup_hint;
 use crate::machine::MachineRoot;
-use crate::permissions::setup_hint;
 
 const CONFIG_FILE: &str = "config.json";
 
