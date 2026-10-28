@@ -10,7 +10,10 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
+};
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 
@@ -21,6 +24,7 @@ use crate::keyboard::{KeyboardTransport, UsbAccess};
 use crate::machine::MachineRoot;
 use crate::models::{FanMode, RgbSettings, SensorSnapshot};
 use crate::settings::{Change, Section, Setting, SettingId, SettingsModel};
+use crate::theme::ColorMode;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(1);
@@ -48,6 +52,8 @@ pub(crate) struct StatusMessage {
 pub(crate) enum Overlay {
     /// "Calibrate battery?" — only a yes starts it.
     ConfirmCalibration,
+    /// Every key and mouse binding.
+    Help,
 }
 
 /// Something clickable drawn in the last frame, for mouse hit-testing.
@@ -98,6 +104,8 @@ pub struct App {
     /// The selected row. Kept by identity so it survives rows appearing and vanishing.
     pub(crate) selected: Option<SettingId>,
     pub(crate) overlay: Option<Overlay>,
+    /// How many colours the terminal gets.
+    pub(crate) color_mode: ColorMode,
     pub(crate) message: Option<StatusMessage>,
     pub(crate) sensors: Sensors,
     pub(crate) keyboard: UsbAccess,
@@ -135,6 +143,7 @@ impl App {
             last_lighting: rgb,
             selected: None,
             overlay: None,
+            color_mode: ColorMode::Truecolor,
             message: None,
             sensors: Sensors::default(),
             keyboard: UsbAccess::NotFound,
@@ -166,15 +175,21 @@ impl App {
             terminal.draw(|frame| self.render(frame))?;
 
             let timeout = FRAME_INTERVAL.saturating_sub(frame_started.elapsed());
-            if event::poll(timeout)?
-                && let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press
-            {
-                self.handle_key(key);
+            if event::poll(timeout)? {
+                match event::read()? {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
+                    Event::Mouse(mouse) => self.handle_mouse(mouse),
+                    _ => {}
+                }
             }
         }
 
         Ok(())
+    }
+
+    /// Sets how many colours to draw with.
+    pub fn set_color_mode(&mut self, mode: ColorMode) {
+        self.color_mode = mode;
     }
 
     /// Whether the app keeps going; false once the user quits.
@@ -322,6 +337,7 @@ impl App {
 
         match key.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => self.quit = true,
+            KeyCode::Char('?') => self.overlay = Some(Overlay::Help),
             KeyCode::Tab => self.jump_section(1),
             KeyCode::BackTab => self.jump_section(-1),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
@@ -338,8 +354,65 @@ impl App {
         }
     }
 
+    /// Reacts to one mouse event, hit-testing against the last frame's rectangles.
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+        if self.overlay.is_some() {
+            return;
+        }
+        match mouse.kind {
+            MouseEventKind::ScrollUp => self.move_selection(-1),
+            MouseEventKind::ScrollDown => self.move_selection(1),
+            MouseEventKind::Down(MouseButton::Left) => match self.hit_at(mouse.column, mouse.row) {
+                Some(Hit::Option(id, index)) => {
+                    self.selected = Some(id);
+                    let change = self.settings.choose(id, index);
+                    self.make(id, change);
+                }
+                Some(Hit::Row(id)) => self.click_row(id, 1),
+                None => {}
+            },
+            MouseEventKind::Down(MouseButton::Right) => {
+                match self.hit_at(mouse.column, mouse.row) {
+                    Some(Hit::Row(id) | Hit::Option(id, _)) => self.click_row(id, -1),
+                    None => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Selects `id`; if it already was selected, steps it by `step`.
+    fn click_row(&mut self, id: SettingId, step: i8) {
+        if self.selected_id() == Some(id) {
+            let change = if step < 0 {
+                self.settings.change(id, step)
+            } else {
+                self.settings.activate(id)
+            };
+            self.make(id, change);
+        } else {
+            self.selected = Some(id);
+        }
+    }
+
+    fn close_overlay(&mut self, overlay: Overlay) {
+        self.overlay = None;
+        if overlay == Overlay::ConfirmCalibration {
+            self.set_message(MessageLevel::Info, "Battery calibration not started");
+        }
+    }
+
     fn on_overlay_key(&mut self, overlay: Overlay, key: KeyEvent) {
+        if key.code == KeyCode::Esc {
+            self.close_overlay(overlay);
+            return;
+        }
         match overlay {
+            Overlay::Help => {
+                if matches!(key.code, KeyCode::Char('?' | 'q')) {
+                    self.overlay = None;
+                }
+            }
             Overlay::ConfirmCalibration => match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                     self.overlay = None;
@@ -352,9 +425,8 @@ impl App {
                         Some(change),
                     );
                 }
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('q') | KeyCode::Esc => {
-                    self.overlay = None;
-                    self.set_message(MessageLevel::Info, "Battery calibration not started");
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('q') => {
+                    self.close_overlay(overlay);
                 }
                 _ => {}
             },
@@ -501,7 +573,6 @@ impl App {
     }
 
     /// What was drawn at `column`, `row` in the last frame; the topmost wins.
-    #[allow(dead_code)] // mouse handling (#12) is the caller
     pub(crate) fn hit_at(&self, column: u16, row: u16) -> Option<Hit> {
         self.hits
             .borrow()

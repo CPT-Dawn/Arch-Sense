@@ -252,6 +252,30 @@ impl SettingsModel {
         }
     }
 
+    /// The change a click on option `index` of `id` asks for: set that option
+    /// directly, or toggle/run a switch or button.
+    pub(crate) fn choose(&self, id: SettingId, index: usize) -> Option<Change> {
+        match id {
+            SettingId::Hardware(capability) => {
+                let laptop = self.laptop.as_ref()?;
+                match self.control(id)? {
+                    Control::Choice { options, .. } if index < options.len() => {
+                        let (value, _) = hardware_choices(capability, laptop).swap_remove(index);
+                        Some(Change::Write { capability, value })
+                    }
+                    Control::Switch(_) | Control::Action { .. } => self.activate(id),
+                    _ => None,
+                }
+            }
+            SettingId::Lighting(field) => {
+                self.control(id)?;
+                let mut lighting = self.lighting?;
+                lighting.set(field, index);
+                Some(Change::Lighting(lighting))
+            }
+        }
+    }
+
     /// The change Enter/Space asks for: toggle, run the action, or step forward.
     pub(crate) fn activate(&self, id: SettingId) -> Option<Change> {
         match self.control(id)? {

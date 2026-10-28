@@ -294,6 +294,16 @@ impl RgbSettings {
         COLOR_PALETTE[self.color_idx]
     }
 
+    /// Jumps a list-valued field straight to option `index`; other fields are left alone.
+    pub(crate) fn set(&mut self, field: RgbField, index: usize) {
+        match field {
+            RgbField::Effect if index < RGB_EFFECTS.len() => self.effect_idx = index,
+            RgbField::Color if index < COLOR_PALETTE.len() => self.color_idx = index,
+            RgbField::Direction if index < DIRECTIONS.len() => self.direction_idx = index,
+            _ => {}
+        }
+    }
+
     pub(crate) fn adjust(&mut self, field: RgbField, step: i8) {
         match field {
             RgbField::Effect => {
