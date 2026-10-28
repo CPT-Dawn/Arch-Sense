@@ -1,23 +1,20 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
+use std::thread::{self, JoinHandle};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
-use crate::constants::{
-    ps, BRIGHT_HW_MAX, CPU_TEMP_PATH, KB_EP, KB_IFACE, PLATFORM_PROFILE, PREAMBLE, PROFILE_CHOICES,
-    PS_BASE, SPEED_HW_FAST, SPEED_HW_SLOW, USB_TIMEOUT,
-};
-use crate::models::{
-    ControlChoice, ControlId, ControlItem, ControlKind, FanMode, Rgb, RgbSettings, SensorMetric,
-    SensorSnapshot, OFF_EFFECT_INDEX, RANDOM_COLOR_INDEX,
-};
-use crate::permissions::{keyboard_access, keyboard_present, open_keyboard, setup_hint, UsbAccess};
-
-const HWMON_BASE: &str = "/sys/class/hwmon";
+use crate::capabilities::{Capability, Laptop, detect};
+use crate::constants::setup_hint;
+use crate::doctor::{self, Membership, Report};
+use crate::keyboard::{KeyboardTransport, UsbAccess, keyboard_access};
+use crate::lighting::{self, Detection, Lighting, saved};
+use crate::machine::MachineRoot;
+use crate::models::{Battery, BatteryState, FanMode, SensorMetric, SensorSnapshot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SensorRole {
@@ -28,6 +25,7 @@ enum SensorRole {
 #[derive(Clone, Debug)]
 struct HwmonFanSample {
     hwmon_name: String,
+    index: usize,
     label: Option<String>,
     rpm: u64,
     pwm: Option<u64>,
@@ -37,6 +35,7 @@ struct HwmonFanSample {
 #[derive(Clone, Debug)]
 struct HwmonTempSample {
     hwmon_name: String,
+    index: usize,
     label: Option<String>,
     celsius: f64,
 }
@@ -44,38 +43,59 @@ struct HwmonTempSample {
 #[derive(Debug)]
 pub(crate) enum HardwareRequest {
     Snapshot,
-    ApplyControl { id: ControlId, value: String },
-    ApplyRgb(RgbSettings),
+    /// Writes `value` to the file behind `capability`.
+    Write {
+        capability: Capability,
+        value: String,
+    },
+    /// Sends `lighting` to the keyboard and saves it as the Saved Lighting.
+    ApplyLighting(Lighting),
+    /// Reads the Saved Lighting from disk.
+    LoadSavedLighting,
+    /// Runs the Doctor.
+    Diagnose,
     Shutdown,
 }
 
 #[derive(Debug)]
 pub(crate) enum HardwareEvent {
     Snapshot(Box<HardwareSnapshot>),
-    ControlApplied {
-        id: ControlId,
-        controls: Vec<ControlItem>,
+    Written {
+        capability: Capability,
+        value: String,
     },
-    ControlFailed {
-        id: ControlId,
-        error: String,
+    WriteFailed {
+        capability: Capability,
+        /// A short, human reason such as "permission denied".
+        reason: String,
     },
-    RgbApplied(String),
-    RgbFailed(String),
+    LightingApplied,
+    /// The keyboard took the lighting but saving it failed.
+    LightingNotSaved(String),
+    LightingFailed(String),
+    /// The Saved Lighting (`None` when nothing is saved), or why it couldn't be read.
+    SavedLighting(Result<Option<Lighting>, String>),
+    /// The Doctor's findings.
+    Diagnosis(Report),
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct HardwareSnapshot {
-    pub(crate) module_loaded: bool,
+    pub(crate) laptop: Laptop,
+    /// The laptop's model name from DMI, when it reads.
+    pub(crate) model: Option<String>,
     pub(crate) keyboard: UsbAccess,
+    /// The keyboard's Lighting Backend, if it has one Arch-Sense drives.
+    pub(crate) lighting: Detection,
     pub(crate) sensors: SensorSnapshot,
-    pub(crate) controls: Vec<ControlItem>,
-    pub(crate) note: Option<String>,
+    /// The current raw value of every Capability present.
+    pub(crate) values: BTreeMap<Capability, String>,
 }
 
 pub(crate) struct HardwareHandle {
     tx: Sender<HardwareRequest>,
     rx: Receiver<HardwareEvent>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl HardwareHandle {
@@ -88,41 +108,60 @@ impl HardwareHandle {
     pub(crate) fn drain(&self) -> Vec<HardwareEvent> {
         self.rx.try_iter().collect()
     }
+
+    /// Stops the worker once it has finished every request already sent, and waits for it.
+    pub(crate) fn shutdown(&mut self) {
+        let _ = self.tx.send(HardwareRequest::Shutdown);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
 }
 
-pub(crate) fn spawn_worker() -> Result<HardwareHandle> {
+pub(crate) fn spawn_worker(
+    machine: MachineRoot,
+    keyboard: Box<dyn KeyboardTransport>,
+) -> Result<HardwareHandle> {
     let (request_tx, request_rx) = mpsc::channel();
     let (event_tx, event_rx) = mpsc::channel();
 
-    thread::Builder::new()
+    let worker = thread::Builder::new()
         .name("arch-sense-hardware".into())
-        .spawn(move || worker_loop(request_rx, event_tx))
+        .spawn(move || worker_loop(machine, keyboard, request_rx, event_tx))
         .context("starting hardware worker")?;
 
     Ok(HardwareHandle {
         tx: request_tx,
         rx: event_rx,
+        worker: Some(worker),
     })
 }
 
-fn worker_loop(rx: Receiver<HardwareRequest>, tx: Sender<HardwareEvent>) {
+fn worker_loop(
+    machine: MachineRoot,
+    mut keyboard: Box<dyn KeyboardTransport>,
+    rx: Receiver<HardwareRequest>,
+    tx: Sender<HardwareEvent>,
+) {
+    let m = &machine;
     for request in rx {
         let event = match request {
-            HardwareRequest::Snapshot => HardwareEvent::Snapshot(Box::new(collect_snapshot())),
-            HardwareRequest::ApplyControl { id, value } => match write_control(id, &value) {
-                Ok(()) => HardwareEvent::ControlApplied {
-                    id,
-                    controls: load_controls(),
-                },
-                Err(error) => HardwareEvent::ControlFailed {
-                    id,
-                    error: error.to_string(),
-                },
-            },
-            HardwareRequest::ApplyRgb(settings) => match apply_rgb_settings(&settings) {
-                Ok(message) => HardwareEvent::RgbApplied(message),
-                Err(error) => HardwareEvent::RgbFailed(error.to_string()),
-            },
+            HardwareRequest::Snapshot => HardwareEvent::Snapshot(Box::new(collect_snapshot(m))),
+            HardwareRequest::Write { capability, value } => {
+                match write_capability(m, capability, &value) {
+                    Ok(()) => HardwareEvent::Written { capability, value },
+                    Err(reason) => HardwareEvent::WriteFailed { capability, reason },
+                }
+            }
+            HardwareRequest::ApplyLighting(lighting) => {
+                apply_lighting(m, &lighting, keyboard.as_mut())
+            }
+            HardwareRequest::LoadSavedLighting => {
+                HardwareEvent::SavedLighting(saved::load(m).map_err(|error| format!("{error:#}")))
+            }
+            HardwareRequest::Diagnose => {
+                HardwareEvent::Diagnosis(doctor::diagnose(m, Membership::current(m)))
+            }
             HardwareRequest::Shutdown => break,
         };
 
@@ -132,62 +171,118 @@ fn worker_loop(rx: Receiver<HardwareRequest>, tx: Sender<HardwareEvent>) {
     }
 }
 
-pub(crate) fn collect_snapshot() -> HardwareSnapshot {
-    let module_loaded = Path::new(PS_BASE).exists();
-    let controls = load_controls();
-    let sensors = read_sensors();
-    let keyboard = keyboard_access();
-    let note = hardware_note(module_loaded, &sensors);
+fn apply_lighting(
+    m: &MachineRoot,
+    lighting: &Lighting,
+    keyboard: &mut dyn KeyboardTransport,
+) -> HardwareEvent {
+    if let Err(error) = lighting::apply(lighting, m, keyboard) {
+        return HardwareEvent::LightingFailed(error.to_string());
+    }
+    match saved::save(m, lighting) {
+        Ok(()) => HardwareEvent::LightingApplied,
+        Err(error) => HardwareEvent::LightingNotSaved(error.to_string()),
+    }
+}
+
+pub(crate) fn collect_snapshot(m: &MachineRoot) -> HardwareSnapshot {
+    let laptop = detect(m);
+    let values = laptop
+        .capabilities()
+        .iter()
+        .filter_map(|&capability| {
+            let path = capability.path(m, laptop.sense_interface)?;
+            read_sysfs(&path).ok().map(|value| (capability, value))
+        })
+        .collect();
+    let sensors = read_sensors(m, &laptop);
+    let keyboard = keyboard_access(m);
+    let lighting = lighting::detect(m);
+    let model = read_optional_string(&m.dmi_product_name());
 
     HardwareSnapshot {
-        module_loaded,
+        laptop,
+        model,
         keyboard,
+        lighting,
         sensors,
-        controls,
-        note,
+        values,
     }
 }
 
-fn hardware_note(module_loaded: bool, sensors: &SensorSnapshot) -> Option<String> {
-    if !module_loaded {
-        return Some(format!("linuwu_sense module offline: missing {PS_BASE}"));
-    }
-
-    [
-        &sensors.cpu_temp,
-        &sensors.gpu_temp,
-        &sensors.cpu_fan,
-        &sensors.gpu_fan,
-    ]
-    .iter()
-    .find_map(|metric| metric.error.clone())
+/// Writes `value` to `capability`'s file, re-detecting the laptop first so a
+/// Capability that vanished is refused rather than written somewhere stale.
+fn write_capability(m: &MachineRoot, capability: Capability, value: &str) -> Result<(), String> {
+    let laptop = detect(m);
+    let path = Some(&laptop)
+        .filter(|laptop| laptop.has(capability))
+        .and_then(|laptop| capability.path(m, laptop.sense_interface))
+        .ok_or_else(|| "not available on this laptop".to_string())?;
+    fs::write(path, value).map_err(|error| match error.kind() {
+        ErrorKind::PermissionDenied => "permission denied".to_string(),
+        ErrorKind::NotFound => "attribute not found".to_string(),
+        _ => error.to_string(),
+    })
 }
 
-fn read_sensors() -> SensorSnapshot {
-    let (cpu_fan, gpu_fan, cpu_fan_mode, gpu_fan_mode) = read_fan_telemetry();
+fn read_sensors(m: &MachineRoot, laptop: &Laptop) -> SensorSnapshot {
+    let (cpu_fan, gpu_fan, cpu_fan_mode, gpu_fan_mode) = read_fan_telemetry(m, laptop);
 
     SensorSnapshot {
-        cpu_temp: read_cpu_temp(),
-        gpu_temp: read_gpu_temp(),
+        cpu_temp: read_cpu_temp(m),
+        gpu_temp: read_gpu_temp(m),
         cpu_fan,
         gpu_fan,
         cpu_fan_mode,
         gpu_fan_mode,
+        battery: read_battery(m),
     }
 }
 
-fn read_cpu_temp() -> SensorMetric {
-    let hwmon = read_hwmon_temperature(SensorRole::Cpu);
+/// The first battery in the power-supply class, if the laptop has one that reads.
+fn read_battery(m: &MachineRoot) -> Option<Battery> {
+    let mut dirs: Vec<PathBuf> = fs::read_dir(m.power_supply_dir())
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|dir| read_optional_string(&dir.join("type")).as_deref() == Some("Battery"))
+        .collect();
+    dirs.sort();
+    let dir = dirs.into_iter().next()?;
+
+    let percent = read_optional_u64(&dir.join("capacity"))?.min(100) as u8;
+    let state = match read_optional_string(&dir.join("status")).as_deref() {
+        Some("Charging") => BatteryState::Charging,
+        Some("Discharging") => BatteryState::Discharging,
+        Some("Full") => BatteryState::Full,
+        Some("Not charging") => BatteryState::NotCharging,
+        _ => BatteryState::Unknown,
+    };
+    let micro = |name: &str| read_optional_u64(&dir.join(name)).map(|value| value as f64);
+    let watts = micro("power_now")
+        .or_else(|| Some(micro("current_now")? * micro("voltage_now")? / 1e6))
+        .map(|microwatts| microwatts / 1e6);
+
+    Some(Battery {
+        percent,
+        state,
+        watts,
+    })
+}
+
+fn read_cpu_temp(m: &MachineRoot) -> SensorMetric {
+    let hwmon = read_hwmon_temperature(m, SensorRole::Cpu);
     if let Ok(value) = hwmon {
         return SensorMetric::available(value);
     }
 
     let hwmon_error = hwmon.err().map(|error| error.to_string());
 
-    match read_sysfs(CPU_TEMP_PATH).and_then(|raw| {
+    let zone = m.cpu_thermal_zone_temp();
+    match read_sysfs(&zone).and_then(|raw| {
         raw.parse::<f64>()
             .map(|value| value / 1000.0)
-            .with_context(|| format!("parsing CPU temperature from {CPU_TEMP_PATH}: {raw}"))
+            .with_context(|| format!("parsing CPU temperature from {}: {raw}", zone.display()))
     }) {
         Ok(value) => SensorMetric::available(value),
         Err(error) => {
@@ -202,15 +297,15 @@ fn read_cpu_temp() -> SensorMetric {
     }
 }
 
-fn read_gpu_temp() -> SensorMetric {
-    let hwmon = read_hwmon_temperature(SensorRole::Gpu);
+fn read_gpu_temp(m: &MachineRoot) -> SensorMetric {
+    let hwmon = read_hwmon_temperature(m, SensorRole::Gpu);
     if let Ok(value) = hwmon {
         return SensorMetric::available(value);
     }
 
     let hwmon_error = hwmon.err().map(|error| error.to_string());
 
-    match read_gpu_temp_from_nvidia_smi() {
+    match read_gpu_temp_from_nvidia_smi(m) {
         Ok(value) => SensorMetric::available(value),
         Err(error) => {
             let detail = match hwmon_error {
@@ -222,8 +317,8 @@ fn read_gpu_temp() -> SensorMetric {
     }
 }
 
-fn read_gpu_temp_from_nvidia_smi() -> Result<f64> {
-    match Command::new("nvidia-smi")
+fn read_gpu_temp_from_nvidia_smi(m: &MachineRoot) -> Result<f64> {
+    match Command::new(m.nvidia_smi())
         .args([
             "--query-gpu=temperature.gpu",
             "--format=csv,noheader,nounits",
@@ -231,7 +326,9 @@ fn read_gpu_temp_from_nvidia_smi() -> Result<f64> {
         .output()
     {
         Ok(output) if output.status.success() => {
-            let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // One line per GPU; the first is the one the card shows.
+            let raw = stdout.lines().next().unwrap_or_default().trim().to_string();
             raw.parse::<f64>()
                 .with_context(|| format!("parsing GPU temperature from nvidia-smi output '{raw}'"))
         }
@@ -251,9 +348,12 @@ fn read_gpu_temp_from_nvidia_smi() -> Result<f64> {
     }
 }
 
-fn read_fan_telemetry() -> (SensorMetric, SensorMetric, FanMode, FanMode) {
-    let linuwu_modes = read_linuwu_fan_modes();
-    let samples = match collect_hwmon_fan_samples() {
+fn read_fan_telemetry(
+    m: &MachineRoot,
+    laptop: &Laptop,
+) -> (SensorMetric, SensorMetric, FanMode, FanMode) {
+    let linuwu_modes = read_linuwu_fan_modes(m, laptop);
+    let samples = match collect_hwmon_fan_samples(m) {
         Ok(samples) => samples,
         Err(error) => {
             let message = format!("hwmon fan discovery failed: {error}");
@@ -267,23 +367,26 @@ fn read_fan_telemetry() -> (SensorMetric, SensorMetric, FanMode, FanMode) {
     };
 
     let (cpu_idx, gpu_idx) = select_fan_sample_indices(&samples);
+    let hwmon_dir = m.hwmon_dir();
 
     let cpu_fan = cpu_idx
         .and_then(|index| samples.get(index))
         .map(|sample| SensorMetric::available(sample.rpm as f64))
         .unwrap_or_else(|| {
-            SensorMetric::unavailable(
-                "CPU fan RPM unavailable: no matching fan*_input under /sys/class/hwmon",
-            )
+            SensorMetric::unavailable(format!(
+                "CPU fan RPM unavailable: no matching fan*_input under {}",
+                hwmon_dir.display()
+            ))
         });
 
     let gpu_fan = gpu_idx
         .and_then(|index| samples.get(index))
         .map(|sample| SensorMetric::available(sample.rpm as f64))
         .unwrap_or_else(|| {
-            SensorMetric::unavailable(
-                "GPU fan RPM unavailable: no matching fan*_input under /sys/class/hwmon",
-            )
+            SensorMetric::unavailable(format!(
+                "GPU fan RPM unavailable: no matching fan*_input under {}",
+                hwmon_dir.display()
+            ))
         });
 
     let cpu_mode = linuwu_modes
@@ -307,8 +410,9 @@ fn read_fan_telemetry() -> (SensorMetric, SensorMetric, FanMode, FanMode) {
     (cpu_fan, gpu_fan, cpu_mode, gpu_mode)
 }
 
-fn read_linuwu_fan_modes() -> Option<(FanMode, FanMode)> {
-    let raw = read_sysfs(&ps("fan_speed")).ok()?;
+fn read_linuwu_fan_modes(m: &MachineRoot, laptop: &Laptop) -> Option<(FanMode, FanMode)> {
+    let path = laptop.sense_interface.attribute(m, "fan_speed")?;
+    let raw = read_sysfs(&path).ok()?;
     let parts: Vec<&str> = raw.split(',').collect();
 
     let parse_mode = |index: usize| -> Option<FanMode> {
@@ -356,7 +460,7 @@ fn best_fan_index(
 fn fan_score(sample: &HwmonFanSample, role: SensorRole) -> i32 {
     let label = sample.label.as_deref().unwrap_or("");
     let haystack = format!("{} {label}", sample.hwmon_name).to_ascii_lowercase();
-    let mut score = 0;
+    let mut score = acer_channel_score(&sample.hwmon_name, sample.index, role);
 
     if contains_any(&haystack, role_keywords(role)) {
         score += 6;
@@ -395,10 +499,10 @@ fn mode_from_hwmon_sample(sample: &HwmonFanSample) -> FanMode {
     FanMode::Auto
 }
 
-fn collect_hwmon_fan_samples() -> Result<Vec<HwmonFanSample>> {
+fn collect_hwmon_fan_samples(m: &MachineRoot) -> Result<Vec<HwmonFanSample>> {
     let mut samples = Vec::new();
 
-    for hwmon_dir in list_hwmon_dirs()? {
+    for hwmon_dir in list_hwmon_dirs(m)? {
         let hwmon_name =
             read_optional_string(&hwmon_dir.join("name")).unwrap_or_else(|| "unknown".to_string());
         let entries = match fs::read_dir(&hwmon_dir) {
@@ -425,6 +529,7 @@ fn collect_hwmon_fan_samples() -> Result<Vec<HwmonFanSample>> {
 
             samples.push(HwmonFanSample {
                 hwmon_name: hwmon_name.clone(),
+                index,
                 label,
                 rpm,
                 pwm,
@@ -436,25 +541,26 @@ fn collect_hwmon_fan_samples() -> Result<Vec<HwmonFanSample>> {
     Ok(samples)
 }
 
-fn read_hwmon_temperature(role: SensorRole) -> Result<f64> {
-    let samples = collect_hwmon_temp_samples()?;
+fn read_hwmon_temperature(m: &MachineRoot, role: SensorRole) -> Result<f64> {
+    let samples = collect_hwmon_temp_samples(m)?;
     let Some(index) = best_temp_index(&samples, role) else {
         bail!(
-            "no temp*_input match for {} role in {HWMON_BASE}",
+            "no temp*_input match for {} role in {}",
             match role {
                 SensorRole::Cpu => "CPU",
                 SensorRole::Gpu => "GPU",
-            }
+            },
+            m.hwmon_dir().display()
         );
     };
 
     Ok(samples[index].celsius)
 }
 
-fn collect_hwmon_temp_samples() -> Result<Vec<HwmonTempSample>> {
+fn collect_hwmon_temp_samples(m: &MachineRoot) -> Result<Vec<HwmonTempSample>> {
     let mut samples = Vec::new();
 
-    for hwmon_dir in list_hwmon_dirs()? {
+    for hwmon_dir in list_hwmon_dirs(m)? {
         let hwmon_name =
             read_optional_string(&hwmon_dir.join("name")).unwrap_or_else(|| "unknown".to_string());
         let entries = match fs::read_dir(&hwmon_dir) {
@@ -490,6 +596,7 @@ fn collect_hwmon_temp_samples() -> Result<Vec<HwmonTempSample>> {
             let label = read_optional_string(&hwmon_dir.join(format!("temp{index}_label")));
             samples.push(HwmonTempSample {
                 hwmon_name: hwmon_name.clone(),
+                index,
                 label,
                 celsius,
             });
@@ -503,14 +610,16 @@ fn best_temp_index(samples: &[HwmonTempSample], role: SensorRole) -> Option<usiz
     samples
         .iter()
         .enumerate()
-        .max_by_key(|(_, sample)| temperature_score(sample, role))
+        .map(|(index, sample)| (index, temperature_score(sample, role)))
+        .filter(|&(_, score)| score > 0)
+        .max_by_key(|&(_, score)| score)
         .map(|(index, _)| index)
 }
 
 fn temperature_score(sample: &HwmonTempSample, role: SensorRole) -> i32 {
     let label = sample.label.as_deref().unwrap_or("");
     let haystack = format!("{} {label}", sample.hwmon_name).to_ascii_lowercase();
-    let mut score = 0;
+    let mut score = acer_channel_score(&sample.hwmon_name, sample.index, role);
 
     if contains_any(&haystack, role_keywords(role)) {
         score += 6;
@@ -536,6 +645,21 @@ fn temperature_score(sample: &HwmonTempSample, role: SensorRole) -> i32 {
     }
 
     score
+}
+
+/// Linuwu-Sense's `acer` hwmon chip has no labels: channel 1 is the CPU and
+/// channel 2 the GPU, for temperatures and fans alike. The bonus stays below a
+/// keyword match, so a labelled `coretemp` or `amdgpu` still wins.
+fn acer_channel_score(hwmon_name: &str, index: usize, role: SensorRole) -> i32 {
+    let channel = match role {
+        SensorRole::Cpu => 1,
+        SensorRole::Gpu => 2,
+    };
+    if hwmon_name == "acer" && index == channel {
+        5
+    } else {
+        0
+    }
 }
 
 fn role_keywords(role: SensorRole) -> &'static [&'static str] {
@@ -574,11 +698,14 @@ fn parse_indexed_attr(name: &str, prefix: &str, suffix: &str) -> Option<usize> {
     name[start..end].parse::<usize>().ok()
 }
 
-fn list_hwmon_dirs() -> Result<Vec<PathBuf>> {
+fn list_hwmon_dirs(m: &MachineRoot) -> Result<Vec<PathBuf>> {
+    let hwmon_dir = m.hwmon_dir();
     let mut dirs = Vec::new();
 
-    for entry in fs::read_dir(HWMON_BASE).with_context(|| format!("reading {HWMON_BASE}"))? {
-        let entry = entry.with_context(|| format!("reading entries in {HWMON_BASE}"))?;
+    for entry in
+        fs::read_dir(&hwmon_dir).with_context(|| format!("reading {}", hwmon_dir.display()))?
+    {
+        let entry = entry.with_context(|| format!("reading entries in {}", hwmon_dir.display()))?;
         let path = entry.path();
         if path.is_dir() {
             dirs.push(path);
@@ -589,166 +716,19 @@ fn list_hwmon_dirs() -> Result<Vec<PathBuf>> {
     Ok(dirs)
 }
 
-pub(crate) fn load_controls() -> Vec<ControlItem> {
-    let thermal_choices = read_thermal_choices().unwrap_or_default();
-
-    ControlId::ALL
-        .iter()
-        .copied()
-        .map(|id| read_control(id, &thermal_choices))
-        .collect()
-}
-
-fn read_control(id: ControlId, thermal_choices: &[String]) -> ControlItem {
-    let kind = control_kind(id, thermal_choices);
-    let raw_result = read_control_raw(id);
-    let (raw, last_error) = match raw_result {
-        Ok(raw) => (raw, None),
-        Err(error) => ("N/A".to_string(), Some(error.to_string())),
-    };
-
-    ControlItem {
-        id,
-        display: display_control_value(id, &raw),
-        raw,
-        kind,
-        pending: None,
-        last_error,
-    }
-}
-
-fn read_thermal_choices() -> Result<Vec<String>> {
-    Ok(read_sysfs(PROFILE_CHOICES)?
-        .split_whitespace()
-        .map(ToOwned::to_owned)
-        .collect())
-}
-
-fn control_kind(id: ControlId, thermal_choices: &[String]) -> ControlKind {
-    match id {
-        ControlId::ThermalProfile => {
-            let choices = if thermal_choices.is_empty() {
-                vec![ControlChoice::new("N/A", "No profiles")]
-            } else {
-                thermal_choices
-                    .iter()
-                    .map(|choice| ControlChoice::new(choice, thermal_label(choice)))
-                    .collect()
-            };
-            ControlKind::Choice(choices)
-        }
-        ControlId::FanSpeed => ControlKind::Choice(vec![
-            ControlChoice::new("0,0", "Auto"),
-            ControlChoice::new("100,100", "Max"),
-        ]),
-        ControlId::UsbCharging => ControlKind::Choice(vec![
-            ControlChoice::new("0", "Off"),
-            ControlChoice::new("10", "Until 10%"),
-            ControlChoice::new("20", "Until 20%"),
-            ControlChoice::new("30", "Until 30%"),
-        ]),
-        _ => ControlKind::Toggle,
-    }
-}
-
-fn read_control_raw(id: ControlId) -> Result<String> {
-    match id {
-        ControlId::ThermalProfile => read_sysfs(PLATFORM_PROFILE),
-        ControlId::BacklightTimeout => read_sysfs(&ps("backlight_timeout")),
-        ControlId::BatteryCalibration => read_sysfs(&ps("battery_calibration")),
-        ControlId::BatteryLimiter => read_sysfs(&ps("battery_limiter")),
-        ControlId::BootAnimation => read_sysfs(&ps("boot_animation_sound")),
-        ControlId::FanSpeed => read_sysfs(&ps("fan_speed")),
-        ControlId::LcdOverride => read_sysfs(&ps("lcd_override")),
-        ControlId::UsbCharging => read_sysfs(&ps("usb_charging")),
-    }
-}
-
-fn write_control(id: ControlId, value: &str) -> Result<()> {
-    if value == "N/A" {
-        bail!(
-            "{} is unavailable because the hardware did not report choices",
-            id.label()
-        );
-    }
-
-    match id {
-        ControlId::ThermalProfile => write_sysfs(PLATFORM_PROFILE, value),
-        ControlId::BacklightTimeout => write_sysfs(&ps("backlight_timeout"), value),
-        ControlId::BatteryCalibration => write_sysfs(&ps("battery_calibration"), value),
-        ControlId::BatteryLimiter => write_sysfs(&ps("battery_limiter"), value),
-        ControlId::BootAnimation => write_sysfs(&ps("boot_animation_sound"), value),
-        ControlId::FanSpeed => write_sysfs(&ps("fan_speed"), value),
-        ControlId::LcdOverride => write_sysfs(&ps("lcd_override"), value),
-        ControlId::UsbCharging => write_sysfs(&ps("usb_charging"), value),
-    }
-}
-
-fn display_control_value(id: ControlId, raw: &str) -> String {
-    match id {
-        ControlId::ThermalProfile => thermal_label(raw).to_string(),
-        ControlId::BacklightTimeout | ControlId::BootAnimation | ControlId::LcdOverride => {
-            on_off(raw)
-        }
-        ControlId::BatteryCalibration => match raw {
-            "1" => "Running".to_string(),
-            "0" => "Stopped".to_string(),
-            other => other.to_string(),
-        },
-        ControlId::BatteryLimiter => match raw {
-            "1" => "80% Limit".to_string(),
-            "0" => "Disabled".to_string(),
-            other => other.to_string(),
-        },
-        ControlId::FanSpeed => match raw {
-            "0" | "0,0" => "Auto".to_string(),
-            "100" | "100,100" => "Max".to_string(),
-            other => format!("CPU/GPU {other}"),
-        },
-        ControlId::UsbCharging => match raw {
-            "0" => "Disabled".to_string(),
-            "10" => "Until 10%".to_string(),
-            "20" => "Until 20%".to_string(),
-            "30" => "Until 30%".to_string(),
-            other => other.to_string(),
-        },
-    }
-}
-
-fn thermal_label(raw: &str) -> &str {
-    match raw {
-        "quiet" => "Quiet",
-        "balanced" => "Balanced",
-        "performance" => "Performance",
-        "low-power" => "Low Power",
-        other => other,
-    }
-}
-
-fn on_off(raw: &str) -> String {
-    match raw {
-        "1" => "Enabled".to_string(),
-        "0" => "Disabled".to_string(),
-        other => other.to_string(),
-    }
-}
-
-fn read_sysfs(path: &str) -> Result<String> {
+fn read_sysfs(path: &Path) -> Result<String> {
     fs::read_to_string(path)
         .map(|content| content.trim().to_string())
         .map_err(|error| sysfs_error(error, "reading", path, None))
 }
 
-fn write_sysfs(path: &str, value: &str) -> Result<()> {
-    fs::write(path, value).map_err(|error| sysfs_error(error, "writing", path, Some(value)))
-}
-
 fn sysfs_error(
     error: std::io::Error,
     action: &str,
-    path: &str,
+    path: &Path,
     value: Option<&str>,
 ) -> anyhow::Error {
+    let path = path.display();
     let target = value
         .map(|value| format!(" value '{value}' to {path}"))
         .unwrap_or_else(|| format!(" {path}"));
@@ -757,143 +737,5 @@ fn sysfs_error(
         anyhow::anyhow!("{action}{target} failed: {error}; {}", setup_hint())
     } else {
         anyhow::anyhow!("{action}{target} failed: {error}")
-    }
-}
-
-pub(crate) fn apply_rgb_settings(settings: &RgbSettings) -> Result<String> {
-    let effect = settings.effect();
-
-    if settings.effect_idx == OFF_EFFECT_INDEX {
-        return send_usb_commands(&[PREAMBLE, [0x08, 0x02, 0x01, 0x00, 0x00, 0x01, 0x01, 0x9B]]);
-    }
-
-    let mut commands = vec![PREAMBLE];
-    if effect.has_color && settings.color_idx != RANDOM_COLOR_INDEX {
-        commands.push(make_color_packet(settings.color().rgb));
-    }
-    commands.push(make_effect_packet(settings));
-
-    send_usb_commands(&commands)
-}
-
-pub(crate) fn is_keyboard_present() -> bool {
-    keyboard_present()
-}
-
-fn make_color_packet(color: Rgb) -> [u8; 8] {
-    [0x14, 0x00, 0x00, color.r, color.g, color.b, 0x00, 0x00]
-}
-
-fn make_effect_packet(settings: &RgbSettings) -> [u8; 8] {
-    let effect = settings.effect();
-    let hardware_brightness = ((settings.brightness as u16) * BRIGHT_HW_MAX as u16 / 100) as u8;
-    let hardware_speed = if settings.speed >= 100 {
-        SPEED_HW_FAST
-    } else {
-        let range = (SPEED_HW_SLOW - SPEED_HW_FAST) as u16;
-        (SPEED_HW_SLOW - (settings.speed as u16 * range / 100) as u8).max(SPEED_HW_FAST)
-    };
-    let color_preset = if settings.color_idx == RANDOM_COLOR_INDEX {
-        0x08
-    } else {
-        0x01
-    };
-    let direction = if effect.has_direction {
-        settings.direction_idx as u8 + 1
-    } else {
-        0x01
-    };
-
-    [
-        0x08,
-        0x02,
-        effect.opcode,
-        hardware_speed,
-        hardware_brightness,
-        color_preset,
-        direction,
-        0x9B,
-    ]
-}
-
-fn send_usb_commands(commands: &[[u8; 8]]) -> Result<String> {
-    let handle = open_keyboard()?;
-    let was_attached = handle.kernel_driver_active(KB_IFACE).unwrap_or(false);
-
-    if was_attached {
-        handle.detach_kernel_driver(KB_IFACE).with_context(|| {
-            format!(
-                "failed to detach keyboard kernel driver on interface {KB_IFACE}; {}",
-                setup_hint()
-            )
-        })?;
-    }
-
-    if let Err(error) = handle
-        .claim_interface(KB_IFACE)
-        .with_context(|| format!("failed to claim USB interface {KB_IFACE}; {}", setup_hint()))
-    {
-        if was_attached {
-            let _ = handle.attach_kernel_driver(KB_IFACE);
-        }
-        return Err(error);
-    }
-
-    let _ = handle.clear_halt(KB_EP);
-
-    let transfer = (|| -> Result<()> {
-        for command in commands {
-            handle
-                .write_control(0x21, 0x09, 0x0300, KB_IFACE as u16, command, USB_TIMEOUT)
-                .with_context(|| {
-                    format!("USB control transfer failed for packet {command:02X?}")
-                })?;
-        }
-        Ok(())
-    })();
-
-    let release = handle
-        .release_interface(KB_IFACE)
-        .context("failed to release USB keyboard interface");
-
-    if was_attached {
-        let _ = handle.attach_kernel_driver(KB_IFACE);
-    }
-
-    transfer?;
-    release?;
-
-    Ok("Keyboard lighting applied".to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::RgbConfig;
-    use crate::models::RgbSettings;
-
-    #[test]
-    fn effect_packet_maps_brightness_and_speed_to_hardware_ranges() {
-        let mut settings = RgbSettings::from_config(&RgbConfig::default());
-        settings.brightness = 100;
-        settings.speed = 0;
-
-        let packet = make_effect_packet(&settings);
-
-        assert_eq!(packet[3], SPEED_HW_SLOW);
-        assert_eq!(packet[4], BRIGHT_HW_MAX);
-    }
-
-    #[test]
-    fn display_values_are_human_readable() {
-        assert_eq!(
-            display_control_value(ControlId::ThermalProfile, "balanced"),
-            "Balanced"
-        );
-        assert_eq!(display_control_value(ControlId::FanSpeed, "0,0"), "Auto");
-        assert_eq!(
-            display_control_value(ControlId::BatteryLimiter, "1"),
-            "80% Limit"
-        );
     }
 }

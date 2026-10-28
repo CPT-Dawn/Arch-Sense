@@ -1,30 +1,28 @@
 use anyhow::Result;
-use clap::Parser;
-use arch_sense::cli::Cli;
+use arch_sense::cli::{Cli, Command};
 use arch_sense::commands;
+use arch_sense::doctor::Membership;
+use arch_sense::keyboard::RusbTransport;
+use arch_sense::machine::MachineRoot;
+use clap::Parser;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-
-    if cli.doctor {
-        return commands::print_permission_report();
+    if cli.demo {
+        return arch_sense::demo::run();
     }
 
-    if cli.install_permissions_root {
-        return commands::install_permissions_as_root();
-    }
+    let machine = MachineRoot::system();
 
-    if cli.install_permissions {
-        return commands::install_permissions();
-    }
-
-    if cli.apply_permissions {
-        return commands::apply_permissions();
+    if cli.command == Some(Command::Doctor) {
+        let membership = Membership::current(&machine);
+        let code = commands::doctor(&machine, membership, &mut std::io::stdout().lock())?;
+        std::process::exit(code);
     }
 
     if cli.apply {
-        return commands::apply_saved_config();
+        return commands::apply_saved_lighting(&machine, &mut RusbTransport);
     }
 
-    arch_sense::run()
+    arch_sense::run(machine, RusbTransport)
 }

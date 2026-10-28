@@ -1,42 +1,69 @@
+use std::io::{self, Write};
+
 use anyhow::Result;
-use crate::config::AppConfig;
-use crate::models::RgbSettings;
-use crate::permissions;
-use crate::hardware;
 
-pub fn print_permission_report() -> Result<()> {
-    permissions::print_permission_report()
-}
+use crate::doctor::{self, Membership};
+use crate::keyboard::KeyboardTransport;
+use crate::lighting::{self, saved};
+use crate::machine::MachineRoot;
 
-pub fn install_permissions() -> Result<()> {
-    permissions::install_permissions()
-}
+/// Boot Restore: reapplies the Saved Lighting, quietly doing nothing when
+/// nothing is saved or the keyboard it was saved for isn't here.
+pub fn apply_saved_lighting(
+    machine: &MachineRoot,
+    keyboard: &mut dyn KeyboardTransport,
+) -> Result<()> {
+    let lighting = match saved::load(machine) {
+        Ok(Some(lighting)) => lighting,
+        Ok(None) => {
+            eprintln!("arch-sense: no Saved Lighting, nothing to restore");
+            return Ok(());
+        }
+        // A bad file is the user's to fix in the app; it must not turn boot red.
+        Err(error) => {
+            eprintln!("arch-sense: warning: ignoring unreadable Saved Lighting: {error:#}");
+            return Ok(());
+        }
+    };
 
-pub fn install_permissions_as_root() -> Result<()> {
-    permissions::install_permissions_as_root()
-}
-
-pub fn apply_permissions() -> Result<()> {
-    permissions::apply_permissions_as_root()
-}
-
-pub fn apply_saved_config() -> Result<()> {
-    let config = AppConfig::load();
-    let rgb = RgbSettings::from_config(&config.rgb);
-
-    if !hardware::is_keyboard_present() {
-        eprintln!("arch-sense: keyboard not found (VID:04F2 PID:0117)");
-        return Ok(());
+    match lighting::detect(machine).backend() {
+        None => {
+            eprintln!("arch-sense: no supported keyboard found, nothing to restore");
+            return Ok(());
+        }
+        Some(backend) if backend != lighting.backend => {
+            eprintln!(
+                "arch-sense: Saved Lighting is for a {} keyboard, but this one is {}; skipping",
+                lighting.backend.name(),
+                backend.name()
+            );
+            return Ok(());
+        }
+        Some(_) => {}
     }
 
-    match hardware::apply_rgb_settings(&rgb) {
-        Ok(message) => {
-            eprintln!("arch-sense: {message}");
+    match lighting::apply(&lighting, machine, keyboard) {
+        Ok(()) => {
+            eprintln!("arch-sense: keyboard lighting restored");
             Ok(())
         }
         Err(error) => {
-            eprintln!("arch-sense: RGB apply failed: {error}");
+            eprintln!("arch-sense: restoring keyboard lighting failed: {error}");
             Err(error)
         }
     }
+}
+
+/// `arch-sense doctor`: writes the Doctor's checklist to `out` and returns the
+/// exit code, non-zero exactly when a check failed with an error.
+pub fn doctor(
+    machine: &MachineRoot,
+    membership: Membership,
+    out: &mut impl Write,
+) -> io::Result<i32> {
+    let report = doctor::diagnose(machine, membership);
+    writeln!(out, "Arch-Sense Doctor (v{})", env!("CARGO_PKG_VERSION"))?;
+    writeln!(out)?;
+    write!(out, "{report}")?;
+    Ok(report.exit_code())
 }
