@@ -63,8 +63,22 @@ check "makepkg --printsrcinfo parses the PKGBUILD" makepkg --printsrcinfo
 cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/Cargo.toml" | head -n1)"
 pkgver="$(makepkg --printsrcinfo 2>/dev/null | sed -n 's/^\tpkgver = //p')"
 check "pkgver ($pkgver) matches Cargo.toml ($cargo_version)" test "$pkgver" = "$cargo_version"
-check "local sources match their checksums" \
-	env SRCDEST="$work/srcdest" BUILDDIR="$work/build" makepkg --verifysource --nodeps --force
+# The release tarball has no checksum we can know before tagging, so only the
+# local files (every source after the tarball) are verified here.
+local_sources_match() {
+	local i=0 src sum
+	mapfile -t sources < <(makepkg --printsrcinfo | sed -n 's/^\tsource = //p')
+	mapfile -t sums < <(makepkg --printsrcinfo | sed -n 's/^\tsha256sums = //p')
+	((${#sources[@]} == ${#sums[@]})) || { echo "source/checksum count mismatch"; return 1; }
+	[[ "${sources[0]}" == "$pkgname-"*".tar.gz::"* ]] || { echo "first source must be the release tarball"; return 1; }
+	for ((i = 1; i < ${#sources[@]}; i++)); do
+		src="${sources[i]}"
+		[[ "$(sha256sum "$here/$src" | cut -d' ' -f1)" == "${sums[i]}" ]] || { echo "checksum drift: $src (run makepkg -g)"; return 1; }
+	done
+}
+pkgname=arch-sense
+check "local sources match their checksums" local_sources_match
+check "release tarball checksum is a sha256" grep -qE "^sha256sums=\('[0-9a-f]{64}'" "$here/PKGBUILD"
 srcinfo="$(makepkg --printsrcinfo 2>/dev/null)"
 check "depends on linuwu-sense-dkms-git" grep -qx $'\tdepends = linuwu-sense-dkms-git' <<<"$srcinfo"
 
@@ -177,10 +191,17 @@ check "pre_remove disables Boot Restore so no enable symlink outlives the unit" 
 
 if [[ "${1:-}" == "--build" ]]; then
 	echo "build"
+	# Unreleased versions have no GitHub tarball, so build from one cut off the
+	# working tree (committed + tracked changes) and pre-seed it. --skipchecksum is
+	# fine: the local files were verified above and the tarball is ours by design.
 	# --nodeps: linuwu-sense-dkms-git needn't be installed to build or test the app.
+	mkdir -p "$work/srcdest"
+	tree="$(git -C "$repo" stash create 2>/dev/null || true)" # empty when the tree is clean
+	git -C "$repo" archive --prefix="Arch-Sense-$pkgver/" "${tree:-HEAD}" |
+		gzip -n >"$work/srcdest/arch-sense-$pkgver.tar.gz"
 	check "makepkg builds and tests the package" \
 		env SRCDEST="$work/srcdest" BUILDDIR="$work/build" PKGDEST="$work/pkg" \
-		makepkg --nodeps --force --cleanbuild --noconfirm
+		makepkg --nodeps --force --cleanbuild --noconfirm --skipchecksum
 	pkg="$(ls "$work"/pkg/arch-sense-[0-9]*.pkg.tar* 2>/dev/null | grep -v '\.sig$' | head -n1)"
 	check "makepkg produced a package" test -n "$pkg"
 	if [[ -n "$pkg" ]]; then
@@ -194,9 +215,10 @@ if [[ "${1:-}" == "--build" ]]; then
 		actual="$(bsdtar -tf "$pkg" | grep -v '^\.' | grep -v '/$' | sort)"
 		check "package ships exactly the expected files" diff <(echo "$expected") <(echo "$actual")
 		if command -v namcap >/dev/null; then
-			check "namcap PKGBUILD" bash -c '[[ -z "$(namcap "$1")" ]]' _ "$here/PKGBUILD"
-			echo "  namcap package output (review; justified exceptions in the PKGBUILD header):"
-			namcap "$pkg" | sed 's/^/        /'
+			check "namcap reports no errors for the PKGBUILD" test -z "$(namcap "$here/PKGBUILD" 2>&1 | grep ' E: ')"
+			check "namcap reports no errors for the package" test -z "$(namcap "$pkg" 2>&1 | grep ' E: ')"
+			echo "  namcap warnings (review):"
+			{ namcap "$here/PKGBUILD"; namcap "$pkg"; } 2>&1 | grep ' W: ' | sed 's/^/        /'
 		else
 			skip "namcap (not installed)"
 		fi
