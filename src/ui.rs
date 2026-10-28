@@ -5,8 +5,8 @@ use ratatui::symbols;
 use ratatui::widgets::*;
 
 use crate::app::{AnimatedMetric, App, MessageLevel};
+use crate::keyboard::UsbAccess;
 use crate::models::{COLOR_PALETTE, FanMode, FocusPanel, RANDOM_COLOR_INDEX, Rgb, RgbField};
-use crate::permissions::UsbAccess;
 use crate::theme::Theme;
 
 /// Consistent spacing/padding throughout the UI (in character units)

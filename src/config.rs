@@ -5,17 +5,13 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::machine::MachineRoot;
 use crate::permissions::setup_hint;
 
-const CONFIG_DIR: &str = "/var/lib/arch-sense";
 const CONFIG_FILE: &str = "config.json";
 
-pub(crate) fn config_dir() -> PathBuf {
-    PathBuf::from(CONFIG_DIR)
-}
-
-pub fn config_path() -> PathBuf {
-    config_dir().join(CONFIG_FILE)
+pub fn config_path(machine: &MachineRoot) -> PathBuf {
+    machine.state_dir().join(CONFIG_FILE)
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -45,19 +41,20 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    pub fn load() -> Self {
-        Self::load_with_warning().0
+    pub fn load(machine: &MachineRoot) -> Self {
+        Self::load_with_warning(machine).0
     }
 
-    pub(crate) fn load_with_warning() -> (Self, Option<String>) {
-        match fs::read_to_string(config_path()) {
+    pub(crate) fn load_with_warning(machine: &MachineRoot) -> (Self, Option<String>) {
+        let path = config_path(machine);
+        match fs::read_to_string(&path) {
             Ok(content) => match serde_json::from_str(&content) {
                 Ok(config) => (config, None),
                 Err(error) => (
                     Self::default(),
                     Some(format!(
                         "Config parse failed at {}: {error}; using defaults",
-                        config_path().display()
+                        path.display()
                     )),
                 ),
             },
@@ -66,17 +63,18 @@ impl AppConfig {
                 Self::default(),
                 Some(format!(
                     "Config read failed at {}: {error}; using defaults",
-                    config_path().display()
+                    path.display()
                 )),
             ),
         }
     }
 
-    pub(crate) fn save(&self) -> Result<()> {
-        fs::create_dir_all(config_dir())
+    pub(crate) fn save(&self, machine: &MachineRoot) -> Result<()> {
+        fs::create_dir_all(machine.state_dir())
             .map_err(|e| config_error(e, "creating config directory"))?;
         let json = serde_json::to_string_pretty(self)?;
-        fs::write(config_path(), json).map_err(|e| config_error(e, "writing config file"))?;
+        fs::write(config_path(machine), json)
+            .map_err(|e| config_error(e, "writing config file"))?;
         Ok(())
     }
 }
