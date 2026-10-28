@@ -11,6 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::capabilities::{self, SenseInterface};
+use crate::constants::JOIN_GROUP;
 use crate::keyboard::{USB_HID_PRODUCT_ID, USB_HID_VENDOR_ID, UsbAccess, keyboard_access};
 use crate::lighting::{self, CONTRIBUTING_URL, Detection, LightingBackend};
 use crate::machine::MachineRoot;
@@ -421,9 +422,23 @@ fn secure_boot(machine: &MachineRoot, facts: &Facts) -> Check {
             NAME,
             Status::Warn,
             "on: an unsigned module won't load",
-            "Sign it: set mok_signing_key/mok_certificate in /etc/dkms/framework.conf (DKMS's default key is /var/lib/dkms/mok.pub), `sudo mokutil --import /var/lib/dkms/mok.pub`, reboot and enrol the key",
+            secure_boot_remedy(),
         ),
     }
+}
+
+/// How to sign the module. The commands run on the real machine, so they name
+/// its paths even when the Doctor is looking at a fake one.
+fn secure_boot_remedy() -> String {
+    let system = MachineRoot::system();
+    let conf = system.dkms_framework_conf();
+    let cert = system.dkms_mok_cert();
+    format!(
+        "Sign it: set mok_signing_key/mok_certificate in {} (DKMS's default key is {}), `sudo mokutil --import {}`, reboot and enrol the key",
+        conf.display(),
+        cert.display(),
+        cert.display()
+    )
 }
 
 fn acer_wmi(facts: &Facts) -> Check {
@@ -466,7 +481,6 @@ fn sense_interface(machine: &MachineRoot, facts: &Facts) -> Check {
 
 fn permissions(membership: Membership) -> Check {
     const NAME: &str = "Permissions";
-    let join = "`sudo usermod -aG arch-sense $USER`, then log out and back in";
     match membership {
         Membership::Member => Check::ok(NAME, "in the arch-sense group"),
         Membership::Root => Check::ok(NAME, "running as root"),
@@ -476,15 +490,18 @@ fn permissions(membership: Membership) -> Check {
             "added to arch-sense, but this login predates it",
             "Log out and back in (or reboot); `newgrp arch-sense` works for one shell",
         ),
-        Membership::NotMember => {
-            Check::not_ok(NAME, Status::Error, "not in the arch-sense group", join)
-        }
+        Membership::NotMember => Check::not_ok(
+            NAME,
+            Status::Error,
+            "not in the arch-sense group",
+            JOIN_GROUP,
+        ),
         Membership::NoGroup => Check::not_ok(
             NAME,
             Status::Error,
             "the arch-sense group doesn't exist",
             format!(
-                "Install the package (`paru -S arch-sense`) or run `sudo systemd-sysusers`, then {join}"
+                "Install the package (`paru -S arch-sense`) or run `sudo systemd-sysusers`, then {JOIN_GROUP}"
             ),
         ),
     }

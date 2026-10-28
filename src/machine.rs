@@ -34,6 +34,10 @@ const KERNEL_RELEASE: &str = "/proc/sys/kernel/osrelease";
 const PROC_VERSION: &str = "/proc/version";
 const KERNEL_MODULES_DIR: &str = "/usr/lib/modules";
 const DKMS_TREE: &str = "/var/lib/dkms";
+/// DKMS's own settings, where module signing keys are configured.
+const DKMS_FRAMEWORK_CONF: &str = "/etc/dkms/framework.conf";
+/// The certificate DKMS signs modules with unless told otherwise, inside [`DKMS_TREE`].
+const DKMS_MOK_CERT: &str = "mok.pub";
 /// The EFI global variable whose last byte is 1 when Secure Boot is on.
 const SECURE_BOOT_VAR: &str =
     "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c";
@@ -207,6 +211,16 @@ impl MachineRoot {
     /// DKMS's state tree: `<module>/<version>/<kernel>/<arch>/module/` per build.
     pub fn dkms_tree(&self) -> PathBuf {
         self.resolve(DKMS_TREE)
+    }
+
+    /// DKMS's settings file, where `mok_signing_key`/`mok_certificate` go.
+    pub fn dkms_framework_conf(&self) -> PathBuf {
+        self.resolve(DKMS_FRAMEWORK_CONF)
+    }
+
+    /// The certificate DKMS signs modules with by default.
+    pub fn dkms_mok_cert(&self) -> PathBuf {
+        self.dkms_tree().join(DKMS_MOK_CERT)
     }
 
     pub fn secure_boot_var(&self) -> PathBuf {

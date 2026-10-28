@@ -85,6 +85,13 @@ fn a_built_but_unloaded_module_on_secure_boot_explains_signing() {
     let secure_boot = check(&report, "Secure Boot");
     assert_eq!(secure_boot.status, Status::Warn);
     assert!(remedy(secure_boot).contains("mokutil"));
+    // The commands run on the real machine, never on the fake tree under test.
+    assert!(
+        remedy(secure_boot).contains("`sudo mokutil --import /var/lib/dkms/mok.pub`"),
+        "{}",
+        remedy(secure_boot)
+    );
+    assert!(remedy(secure_boot).contains("/etc/dkms/framework.conf"));
     assert!(remedy(check(&report, "Kernel module")).contains("modprobe linuwu_sense"));
     assert_eq!(check(&report, "DKMS").status, Status::Ok);
 }
