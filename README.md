@@ -214,8 +214,9 @@ run. Three things changed:
   sudo rm -f /etc/udev/rules.d/70-arch-sense.rules /etc/systemd/system/arch-sense-permissions.service
   ```
 
-- **Boot Restore is opt-in.** If you relied on lighting coming back at boot, enable it
-  as [shown above](#optional-boot-restore).
+- **Boot Restore is opt-in.** v1 switched it on for you; the upgrade switches it off
+  again. If you relied on lighting coming back at boot, enable it as
+  [shown above](#optional-boot-restore).
 - **The kernel module comes from the AUR.** If you built Linuwu-Sense by hand with
   `make install`, Arch-Sense still works with it, but you no longer need to maintain it
   yourself.

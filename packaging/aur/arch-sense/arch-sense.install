@@ -1,7 +1,8 @@
 # pacman scriptlets for arch-sense. They reload udev so the new rules reach the
 # hardware right away, and say what to do next. pacman's own systemd hooks create
 # the group and the state folder and reload units after the transaction.
-# Boot Restore (arch-sense.service) is opt-in: nothing here enables it.
+# Boot Restore (arch-sense.service) is opt-in: nothing here enables it, and an
+# upgrade from v1 (which enabled it unasked) switches it off.
 
 _arch_sense_live() {
   # A booted system, not a chroot (e.g. arch-chroot during an install).
@@ -42,8 +43,19 @@ EOF
   _arch_sense_v1_leftovers
 }
 
+_arch_sense_v1_boot_restore() {
+  # v1's post_upgrade enabled Boot Restore for everyone; in v2 it is opt-in.
+  systemctl --quiet is-enabled arch-sense.service >/dev/null 2>&1 || return 0
+  systemctl --quiet --no-reload disable arch-sense.service >/dev/null 2>&1 || true
+  echo "==> Boot Restore is opt-in now, so it has been switched off; keep it with: sudo systemctl enable arch-sense.service"
+}
+
 post_upgrade() {
   _arch_sense_apply_rules
+  # $2 is the version being upgraded from.
+  if [ "$(vercmp "$2" 2.0.0)" -lt 0 ]; then
+    _arch_sense_v1_boot_restore
+  fi
   _arch_sense_v1_leftovers
 }
 

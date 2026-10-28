@@ -182,8 +182,31 @@ check "post_install reloads udev rules" grep -qF 'udevadm control --reload' <<<"
 check "post_install re-triggers the hardware" grep -qF 'udevadm trigger' <<<"$calls"
 check "post_install never enables or starts a unit" bash -c '! grep -E "systemctl .*(enable|start)" <<<"$1"' _ "$calls"
 : >"$work/calls"
-PATH="$stubs:$PATH" bash -c '. "$1"; post_upgrade 2.0.0-1 1.3.2-1' _ "$install_script" >/dev/null 2>&1
-check "post_upgrade never enables or starts a unit" bash -c '! grep -E "systemctl .*(enable|start)" "$1"' _ "$work/calls"
+# v1's post_upgrade enabled Boot Restore for everyone; v2 makes it opt-in, so
+# upgrading from v1 switches it off (the stub says it's enabled) and says how to keep it.
+v1_upgrade_out="$(PATH="$stubs:$PATH" bash -c '. "$1"; post_upgrade 2.0.0-1 1.3.2-1' _ "$install_script" 2>&1)"
+check "post_upgrade never enables or starts a unit" bash -c '! grep -E "systemctl .*(enable|start)( |$)" "$1"' _ "$work/calls"
+check "post_upgrade from v1 disables the Boot Restore v1 enabled" \
+	grep -qE 'systemctl .*disable arch-sense.service' "$work/calls"
+check "post_upgrade from v1 says Boot Restore is opt-in, in one line" \
+	bash -c '[[ "$(grep -c "Boot Restore" <<<"$1")" == 1 ]] && grep "Boot Restore" <<<"$1" | grep -qF "systemctl enable arch-sense.service"' _ "$v1_upgrade_out"
+: >"$work/calls"
+v2_upgrade_out="$(PATH="$stubs:$PATH" bash -c '. "$1"; post_upgrade 2.0.1-1 2.0.0-1' _ "$install_script" 2>&1)"
+check "post_upgrade within v2 leaves Boot Restore alone" \
+	bash -c '! grep -qE "systemctl .*(disable|enable)" "$1"' _ "$work/calls"
+check "post_upgrade within v2 says nothing about Boot Restore" \
+	bash -c '! grep -q "Boot Restore" <<<"$1"' _ "$v2_upgrade_out"
+# A v1 user who never had Boot Restore on: nothing to switch off, nothing to say.
+v1_off="$work/stubs-v1-off"
+mkdir -p "$v1_off"
+printf '#!/bin/sh\necho "systemctl $*" >>"%s/calls"\ncase "$*" in *is-enabled*) exit 1 ;; esac\n' "$work" >"$v1_off/systemctl"
+chmod +x "$v1_off/systemctl"
+: >"$work/calls"
+v1_off_out="$(PATH="$v1_off:$stubs:$PATH" bash -c '. "$1"; post_upgrade 2.0.0-1 1.3.2-1' _ "$install_script" 2>&1)"
+check "post_upgrade from v1 without Boot Restore disables nothing" \
+	bash -c '! grep -qE "systemctl .*disable" "$1"' _ "$work/calls"
+check "post_upgrade from v1 without Boot Restore stays quiet about it" \
+	bash -c '! grep -q "Boot Restore" <<<"$1"' _ "$v1_off_out"
 : >"$work/calls"
 PATH="$stubs:$PATH" bash -c '. "$1"; pre_remove 2.0.0-1' _ "$install_script" >/dev/null 2>&1
 check "pre_remove disables Boot Restore so no enable symlink outlives the unit" \
