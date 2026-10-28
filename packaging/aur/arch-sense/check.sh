@@ -158,6 +158,14 @@ check "tmpfiles.d entry is valid" systemd-tmpfiles --dry-run --create --root="$w
 mkdir -p "$work/unitroot/usr/bin" "$work/unitroot/usr/lib/systemd/system"
 install -m755 /dev/null "$work/unitroot/usr/bin/arch-sense"
 cp "$service" "$work/unitroot/usr/lib/systemd/system/"
+check "Boot Restore doesn't wait on the deprecated systemd-udev-settle" \
+	bash -c '! grep -q "udev-settle" "$1"' _ "$service"
+check "Boot Restore runs after Linuwu-Sense loads (and replays its own state)" \
+	grep -qE '^After=.*systemd-modules-load\.service' "$service"
+check "Boot Restore runs after udev's coldplug" \
+	grep -qE '^After=.*systemd-udev-trigger\.service' "$service"
+check "Boot Restore stays opt-in: udev never pulls it in" \
+	bash -c '! grep -qE "SYSTEMD_WANTS|ENV\{SYSTEMD_" "$1"' _ "$rules"
 check "systemd-analyze verify arch-sense.service" \
 	systemd-analyze verify --root="$work/unitroot" "$work/unitroot/usr/lib/systemd/system/arch-sense.service"
 
