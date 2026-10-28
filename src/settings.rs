@@ -8,10 +8,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::capabilities::{Capability, Laptop};
-use crate::models::{
-    COLOR_PALETTE, DIRECTIONS, OFF_EFFECT_INDEX, RANDOM_COLOR_INDEX, RGB_EFFECTS, Rgb, RgbField,
-    RgbSettings,
-};
+use crate::lighting::{Colour, Lighting, LightingBackend, PALETTE, Rgb};
 
 /// A group of settings under one heading.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -45,8 +42,19 @@ impl Section {
 pub(crate) enum SettingId {
     /// A Capability of the laptop, read from and written to its attribute file.
     Hardware(Capability),
-    /// One field of the keyboard lighting.
-    Lighting(RgbField),
+    /// One parameter of the keyboard lighting.
+    Lighting(LightingField),
+}
+
+/// The lighting parameters the Lighting section can show. Which appear depends
+/// on what the current Lighting Effect uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum LightingField {
+    Effect,
+    Colour,
+    Brightness,
+    Speed,
+    Direction,
 }
 
 /// Every setting, in list order.
@@ -59,11 +67,11 @@ const ORDER: [SettingId; 13] = [
     SettingId::Hardware(Capability::BootAnimation),
     SettingId::Hardware(Capability::LcdOverdrive),
     SettingId::Hardware(Capability::BacklightTimeout),
-    SettingId::Lighting(RgbField::Effect),
-    SettingId::Lighting(RgbField::Color),
-    SettingId::Lighting(RgbField::Brightness),
-    SettingId::Lighting(RgbField::Speed),
-    SettingId::Lighting(RgbField::Direction),
+    SettingId::Lighting(LightingField::Effect),
+    SettingId::Lighting(LightingField::Colour),
+    SettingId::Lighting(LightingField::Brightness),
+    SettingId::Lighting(LightingField::Speed),
+    SettingId::Lighting(LightingField::Direction),
 ];
 
 impl SettingId {
@@ -91,11 +99,11 @@ impl SettingId {
                 Capability::BacklightTimeout => "Backlight timeout",
             },
             Self::Lighting(field) => match field {
-                RgbField::Effect => "Effect",
-                RgbField::Color => "Colour",
-                RgbField::Brightness => "Brightness",
-                RgbField::Speed => "Speed",
-                RgbField::Direction => "Direction",
+                LightingField::Effect => "Effect",
+                LightingField::Colour => "Colour",
+                LightingField::Brightness => "Brightness",
+                LightingField::Speed => "Speed",
+                LightingField::Direction => "Direction",
             },
         }
     }
@@ -114,9 +122,9 @@ impl SettingId {
                 Capability::BacklightTimeout => "Keyboard light off after 30 s idle",
             },
             Self::Lighting(field) => match field {
-                RgbField::Effect => "Rendered by the keyboard itself",
-                RgbField::Color => "Colour the effect uses",
-                RgbField::Brightness | RgbField::Speed | RgbField::Direction => "",
+                LightingField::Effect => "Rendered by the keyboard itself",
+                LightingField::Colour => "←→ palette · ⏎ or # custom hex",
+                LightingField::Brightness | LightingField::Speed | LightingField::Direction => "",
             },
         }
     }
@@ -137,10 +145,11 @@ pub(crate) enum Control {
     Action { running: bool },
     /// A percentage.
     Slider(u8),
-    /// A palette of colour swatches; `None` stands for Random.
+    /// A palette of colour swatches, then a "# custom" affordance. A `None`
+    /// swatch stands for Random; `current` is `None` for a custom colour.
     Swatches {
         colours: Vec<Option<Rgb>>,
-        current: usize,
+        current: Option<usize>,
         name: String,
     },
 }
@@ -178,8 +187,10 @@ pub(crate) enum Change {
         capability: Capability,
         value: String,
     },
-    /// Send this lighting to the keyboard.
-    Lighting(RgbSettings),
+    /// Preview this lighting on the keyboard (once input settles) and save it.
+    Lighting(Lighting),
+    /// Ask for a custom hex colour.
+    CustomColour,
     /// Ask before starting battery calibration.
     ConfirmCalibration,
 }
@@ -192,7 +203,7 @@ pub(crate) struct SettingsModel {
     /// The raw value of every Capability present.
     pub(crate) values: BTreeMap<Capability, String>,
     /// The keyboard lighting, when there is a keyboard to light.
-    pub(crate) lighting: Option<RgbSettings>,
+    pub(crate) lighting: Option<Lighting>,
     /// The last failure per setting.
     pub(crate) errors: HashMap<SettingId, String>,
 }
@@ -244,12 +255,18 @@ impl SettingsModel {
                 }
             }
             SettingId::Lighting(field) => {
-                self.control(id)?;
-                let mut lighting = self.lighting?;
-                lighting.adjust(field, step);
+                let control = self.control(id)?;
+                let lighting = adjust_lighting(self.lighting.as_ref()?, field, &control, step)?;
                 Some(Change::Lighting(lighting))
             }
         }
+    }
+
+    /// The change a custom colour asks for: every zone takes `rgb`.
+    pub(crate) fn custom_colour(&self, rgb: Rgb) -> Option<Change> {
+        let mut lighting = self.lighting.clone()?;
+        lighting.colours.fill(Colour::Rgb(rgb));
+        Some(Change::Lighting(lighting))
     }
 
     /// The change Enter/Space asks for: toggle, run the action, or step forward.
@@ -260,6 +277,7 @@ impl SettingsModel {
                 capability: Capability::BatteryCalibration,
                 value: "0".to_string(),
             }),
+            Control::Swatches { .. } => Some(Change::CustomColour),
             _ => self.change(id, 1),
         }
     }
@@ -270,8 +288,8 @@ impl SettingsModel {
             Change::Write { capability, value } => {
                 self.values.insert(*capability, value.clone());
             }
-            Change::Lighting(lighting) => self.lighting = Some(*lighting),
-            Change::ConfirmCalibration => {}
+            Change::Lighting(lighting) => self.lighting = Some(lighting.clone()),
+            Change::CustomColour | Change::ConfirmCalibration => {}
         }
     }
 
@@ -361,32 +379,85 @@ fn thermal_label(profile: &str) -> String {
         .join(" ")
 }
 
-fn lighting_control(field: RgbField, lighting: &RgbSettings) -> Option<Control> {
-    let effect = lighting.effect();
-    let off = lighting.effect_idx == OFF_EFFECT_INDEX;
-    let names = |names: &mut dyn Iterator<Item = &str>| names.map(str::to_owned).collect();
+/// A lighting row's control, or `None` when the current effect doesn't use it.
+fn lighting_control(field: LightingField, lighting: &Lighting) -> Option<Control> {
+    let backend = lighting.backend;
+    let uses = lighting.effect.uses;
     match field {
-        RgbField::Effect => Some(Control::Choice {
-            options: names(&mut RGB_EFFECTS.iter().map(|effect| effect.name)),
-            current: Some(lighting.effect_idx),
-        }),
-        RgbField::Color if effect.has_color => Some(Control::Swatches {
-            colours: COLOR_PALETTE
+        LightingField::Effect => Some(Control::Choice {
+            options: backend
+                .effects()
                 .iter()
-                .enumerate()
-                .map(|(index, colour)| (index != RANDOM_COLOR_INDEX).then_some(colour.rgb))
+                .map(|e| e.name.to_string())
                 .collect(),
-            current: lighting.color_idx,
-            name: lighting.color().name.to_string(),
+            current: backend.effects().iter().position(|e| e == lighting.effect),
         }),
-        RgbField::Brightness if !off => Some(Control::Slider(lighting.brightness)),
-        RgbField::Speed if !off && effect.name != "Static" => Some(Control::Slider(lighting.speed)),
-        RgbField::Direction if effect.has_direction => Some(Control::Choice {
-            options: names(&mut DIRECTIONS.iter().copied()),
-            current: Some(lighting.direction_idx),
+        LightingField::Colour if uses.colour => {
+            let colours = swatches(backend);
+            let colour = lighting.colour();
+            Some(Control::Swatches {
+                current: colours
+                    .iter()
+                    .position(|&swatch| swatch_colour(swatch) == colour),
+                colours,
+                name: colour.name(),
+            })
+        }
+        LightingField::Brightness if uses.brightness => Some(Control::Slider(lighting.brightness)),
+        LightingField::Speed if uses.speed => Some(Control::Slider(lighting.speed)),
+        LightingField::Direction if uses.direction => Some(Control::Choice {
+            options: backend.directions().iter().map(|d| d.to_string()).collect(),
+            current: backend
+                .directions()
+                .iter()
+                .position(|&d| d == lighting.direction),
         }),
         _ => None,
     }
+}
+
+/// The swatches the Colour row offers: the palette, then Random where the backend has it.
+fn swatches(backend: LightingBackend) -> Vec<Option<Rgb>> {
+    let palette = PALETTE.iter().map(|&(_, rgb)| Some(rgb));
+    let random = backend.has_random_colour().then_some(None);
+    palette.chain(random).collect()
+}
+
+fn swatch_colour(swatch: Option<Rgb>) -> Colour {
+    swatch.map_or(Colour::Random, Colour::Rgb)
+}
+
+/// `lighting` with `field` stepped by `step`: ±1 option, or ±5% for a slider.
+fn adjust_lighting(
+    lighting: &Lighting,
+    field: LightingField,
+    control: &Control,
+    step: i8,
+) -> Option<Lighting> {
+    let mut next = lighting.clone();
+    let backend = lighting.backend;
+    let percent = |value: u8| (value as i16 + if step < 0 { -5 } else { 5 }).clamp(0, 100) as u8;
+    match (field, control) {
+        (LightingField::Effect, Control::Choice { options, current }) => {
+            next.effect = &backend.effects()[step_index(*current, options.len(), step)?];
+        }
+        (LightingField::Direction, Control::Choice { options, current }) => {
+            next.direction = backend.directions()[step_index(*current, options.len(), step)?];
+        }
+        (
+            LightingField::Colour,
+            Control::Swatches {
+                colours, current, ..
+            },
+        ) => {
+            let swatch = colours[step_index(*current, colours.len(), step)?];
+            next.colours.fill(swatch_colour(swatch));
+        }
+        (LightingField::Brightness, _) => next.brightness = percent(lighting.brightness),
+        (LightingField::Speed, _) => next.speed = percent(lighting.speed),
+        _ => return None,
+    }
+    Some(next)
 }
 
 /// The index `step` away from `current` in a list of `len`, wrapping around.

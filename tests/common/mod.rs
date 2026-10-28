@@ -66,6 +66,17 @@ impl Harness {
         }
     }
 
+    /// Lets `by` pass for the app (in frame-sized ticks) without rendering, so
+    /// time-based behaviour such as the lighting debounce runs deterministically.
+    pub fn advance(&mut self, by: Duration) {
+        let mut left = by;
+        while !left.is_zero() {
+            let step = left.min(POLL_STEP);
+            self.app.tick(step);
+            left -= step;
+        }
+    }
+
     /// Whether the app is still running (it stops after a quit key).
     pub fn is_running(&self) -> bool {
         self.app.is_running()

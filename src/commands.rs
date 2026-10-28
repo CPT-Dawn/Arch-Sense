@@ -1,30 +1,43 @@
 use anyhow::Result;
 
-use crate::config::AppConfig;
-use crate::hardware;
-use crate::keyboard::{KeyboardTransport, UsbAccess, keyboard_access};
+use crate::keyboard::KeyboardTransport;
+use crate::lighting::{self, saved};
 use crate::machine::MachineRoot;
-use crate::models::RgbSettings;
 
+/// Boot Restore: reapplies the Saved Lighting, quietly doing nothing when
+/// nothing is saved or the keyboard it was saved for isn't here.
 pub fn apply_saved_config(
     machine: &MachineRoot,
     keyboard: &mut dyn KeyboardTransport,
 ) -> Result<()> {
-    let config = AppConfig::load(machine);
-    let rgb = RgbSettings::from_config(&config.rgb);
-
-    if keyboard_access(machine) == UsbAccess::NotFound {
-        eprintln!("arch-sense: keyboard not found (VID:04F2 PID:0117)");
+    let Some(lighting) = saved::load(machine)? else {
+        eprintln!("arch-sense: no Saved Lighting, nothing to restore");
         return Ok(());
+    };
+
+    match lighting::detect(machine) {
+        None => {
+            eprintln!("arch-sense: no supported keyboard found, nothing to restore");
+            return Ok(());
+        }
+        Some(backend) if backend != lighting.backend => {
+            eprintln!(
+                "arch-sense: Saved Lighting is for a {} keyboard, but this one is {}; skipping",
+                lighting.backend.name(),
+                backend.name()
+            );
+            return Ok(());
+        }
+        Some(_) => {}
     }
 
-    match hardware::apply_rgb_settings(&rgb, keyboard) {
-        Ok(message) => {
-            eprintln!("arch-sense: {message}");
+    match lighting::apply(&lighting, machine, keyboard) {
+        Ok(()) => {
+            eprintln!("arch-sense: keyboard lighting restored");
             Ok(())
         }
         Err(error) => {
-            eprintln!("arch-sense: RGB apply failed: {error}");
+            eprintln!("arch-sense: restoring keyboard lighting failed: {error}");
             Err(error)
         }
     }

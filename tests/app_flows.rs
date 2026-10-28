@@ -4,6 +4,7 @@ use std::fs;
 
 use arch_sense::fixture::FakeMachine;
 use arch_sense::keyboard::RecordingTransport;
+use arch_sense::lighting::saved;
 use crossterm::event::KeyCode;
 
 use common::Harness;
@@ -67,12 +68,13 @@ fn changing_the_lighting_sends_it_to_the_keyboard_and_saves_it() {
             [0x08, 0x02, 0x02, 0x05, 0x0F, 0x01, 0x01, 0x9B],
         ]]
     );
-    let saved = fake.machine().state_dir().join("config.json");
-    app.wait_until("the lighting to be saved", |_| saved.exists());
-    let saved: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(saved).unwrap()).unwrap();
-    assert_eq!(saved["rgb"]["effect"], 2);
-    assert_eq!(saved["rgb"]["brightness"], 30);
+    let machine = fake.machine();
+    app.wait_until("the lighting to be saved", |_| {
+        saved::path(&machine).exists()
+    });
+    let saved = saved::load(&machine).unwrap().expect("Saved Lighting");
+    assert_eq!(saved.effect.name, "Breathing");
+    assert_eq!(saved.brightness, 30);
     app.wait_until("the footer confirmation", |app| {
         app.screen().contains("✓ Effect → Breathing · saved")
     });
