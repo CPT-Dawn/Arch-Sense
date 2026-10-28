@@ -93,7 +93,7 @@ impl FakeMachineBuilder {
     pub fn four_zoned_kb(self) -> Self {
         self.file(
             |m| m.four_zone_kb_dir().join("four_zone_mode"),
-            "0,100,0,0,0,0\n",
+            "0,0,100,0,255,255,255\n",
         )
         .file(
             |m| m.four_zone_kb_dir().join("per_zone_mode"),

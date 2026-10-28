@@ -78,6 +78,44 @@ fn saved_lighting_is_versioned_json_by_name() {
 }
 
 #[test]
+fn four_zone_lighting_round_trips_with_a_colour_per_zone() {
+    let fake = machine();
+    let backend = LightingBackend::FourZone;
+    let lighting = Lighting {
+        colours: vec![
+            Colour::Rgb(Rgb::new(255, 0, 0)),
+            Colour::Rgb(Rgb::new(0, 255, 0)),
+            Colour::Rgb(Rgb::new(0, 0, 255)),
+            Colour::Rgb(Rgb::WHITE),
+        ],
+        brightness: 70,
+        ..backend.default_lighting()
+    };
+
+    saved::save(&fake.machine(), &lighting).expect("saves");
+
+    let json = saved_json(&fake);
+    assert_eq!(json["backend"], "four-zone");
+    assert_eq!(
+        json["colours"],
+        json!(["#FF0000", "#00FF00", "#0000FF", "#FFFFFF"])
+    );
+    assert_eq!(saved::load(&fake.machine()).expect("loads"), Some(lighting));
+}
+
+#[test]
+fn a_four_zone_file_with_the_wrong_number_of_colours_is_an_error() {
+    let fake = machine();
+    let backend = LightingBackend::FourZone;
+    saved::save(&fake.machine(), &backend.default_lighting()).expect("saves");
+    let mut json = saved_json(&fake);
+    json["colours"] = json!(["#FFFFFF"]);
+    fs::write(saved::path(&fake.machine()), json.to_string()).unwrap();
+
+    assert!(saved::load(&fake.machine()).is_err());
+}
+
+#[test]
 fn a_random_colour_round_trips() {
     let fake = machine();
     let mut stars = wave();

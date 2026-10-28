@@ -143,12 +143,14 @@ fn parse(text: &str) -> Result<Lighting> {
 fn backend_id(backend: LightingBackend) -> &'static str {
     match backend {
         LightingBackend::UsbHid => "usb-hid",
+        LightingBackend::FourZone => "four-zone",
     }
 }
 
 fn backend_from_id(id: &str) -> Option<LightingBackend> {
     match id {
         "usb-hid" => Some(LightingBackend::UsbHid),
+        "four-zone" => Some(LightingBackend::FourZone),
         _ => None,
     }
 }

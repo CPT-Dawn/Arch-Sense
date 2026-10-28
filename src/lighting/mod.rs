@@ -8,10 +8,12 @@
 //!
 //! Saved Lighting, the persisted [`Lighting`], lives in [`saved`].
 
+mod four_zone;
 pub mod saved;
 mod usb_hid;
 
 use std::fmt;
+use std::path::Path;
 
 use anyhow::Result;
 
@@ -23,6 +25,8 @@ use crate::machine::MachineRoot;
 pub enum LightingBackend {
     /// The PH16-71-family Chicony keyboard (`04f2:0117`), spoken to directly over USB.
     UsbHid,
+    /// Linuwu-Sense's `four_zoned_kb` attributes: effects, plus a colour per zone.
+    FourZone,
 }
 
 impl LightingBackend {
@@ -30,6 +34,7 @@ impl LightingBackend {
     pub fn name(self) -> &'static str {
         match self {
             Self::UsbHid => "USB HID",
+            Self::FourZone => "Four-Zone",
         }
     }
 
@@ -37,6 +42,7 @@ impl LightingBackend {
     pub fn effects(self) -> &'static [Effect] {
         match self {
             Self::UsbHid => &usb_hid::EFFECTS,
+            Self::FourZone => &four_zone::EFFECTS,
         }
     }
 
@@ -49,6 +55,7 @@ impl LightingBackend {
     pub fn directions(self) -> &'static [&'static str] {
         match self {
             Self::UsbHid => &usb_hid::DIRECTIONS,
+            Self::FourZone => &four_zone::DIRECTIONS,
         }
     }
 
@@ -56,6 +63,7 @@ impl LightingBackend {
     pub fn zones(self) -> usize {
         match self {
             Self::UsbHid => 1,
+            Self::FourZone => four_zone::ZONES,
         }
     }
 
@@ -63,6 +71,7 @@ impl LightingBackend {
     pub fn has_random_colour(self) -> bool {
         match self {
             Self::UsbHid => true,
+            Self::FourZone => false,
         }
     }
 
@@ -96,6 +105,8 @@ pub struct Uses {
     pub brightness: bool,
     pub speed: bool,
     pub direction: bool,
+    /// Whether each zone can take its own colour (the UI then offers a Zone selector).
+    pub zones: bool,
 }
 
 /// A 24-bit RGB colour.
@@ -195,19 +206,90 @@ impl Lighting {
     }
 }
 
-/// Finds the keyboard's Lighting Backend on `machine`, if it has one Arch-Sense drives.
-pub fn detect(machine: &MachineRoot) -> Option<LightingBackend> {
-    (keyboard_access(machine) != UsbAccess::NotFound).then_some(LightingBackend::UsbHid)
+/// Where to learn how to help support a keyboard Arch-Sense can't drive yet.
+pub const CONTRIBUTING_URL: &str = "https://github.com/CPT-Dawn/Arch-Sense#contributing";
+
+/// A USB keyboard that exists on Linuwu-Sense laptops but that no Lighting Backend drives yet.
+#[derive(Debug, PartialEq, Eq)]
+pub struct UnsupportedKeyboard {
+    pub vendor: u16,
+    pub product: u16,
+    pub name: &'static str,
+}
+
+impl fmt::Display for UnsupportedKeyboard {
+    /// E.g. `Jing-Mold 05af:666a`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {:04x}:{:04x}", self.name, self.vendor, self.product)
+    }
+}
+
+const UNSUPPORTED_KEYBOARDS: [UnsupportedKeyboard; 1] = [UnsupportedKeyboard {
+    vendor: 0x05af,
+    product: 0x666a,
+    name: "Jing-Mold",
+}];
+
+/// What [`detect`] found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Detection {
+    /// A keyboard Arch-Sense can drive.
+    Backend(LightingBackend),
+    /// A keyboard we recognise but can't drive yet.
+    Unsupported(&'static UnsupportedKeyboard),
+    /// No RGB keyboard found.
+    None,
+}
+
+impl Detection {
+    /// The backend, if one was found.
+    pub fn backend(self) -> Option<LightingBackend> {
+        match self {
+            Self::Backend(backend) => Some(backend),
+            Self::Unsupported(_) | Self::None => None,
+        }
+    }
+}
+
+/// Finds the keyboard's Lighting Backend on `machine`: Four-Zone when
+/// Linuwu-Sense exposes it, otherwise USB HID when that keyboard is plugged in,
+/// otherwise a known unsupported keyboard, otherwise nothing.
+pub fn detect(machine: &MachineRoot) -> Detection {
+    if machine.four_zone_kb_dir().is_dir() {
+        Detection::Backend(LightingBackend::FourZone)
+    } else if keyboard_access(machine) != UsbAccess::NotFound {
+        Detection::Backend(LightingBackend::UsbHid)
+    } else {
+        unsupported_keyboard(machine).map_or(Detection::None, Detection::Unsupported)
+    }
+}
+
+fn unsupported_keyboard(machine: &MachineRoot) -> Option<&'static UnsupportedKeyboard> {
+    let id = |device: &Path, attr: &str| {
+        let text = std::fs::read_to_string(device.join(attr)).ok()?;
+        u16::from_str_radix(text.trim(), 16).ok()
+    };
+    std::fs::read_dir(machine.usb_devices_dir())
+        .ok()?
+        .flatten()
+        .find_map(|entry| {
+            let device = entry.path();
+            let (vendor, product) = (id(&device, "idVendor")?, id(&device, "idProduct")?);
+            UNSUPPORTED_KEYBOARDS
+                .iter()
+                .find(|keyboard| (keyboard.vendor, keyboard.product) == (vendor, product))
+        })
 }
 
 /// Sends `lighting` to its backend's hardware: USB HID packets go through
 /// `keyboard`, Linuwu-Sense attributes resolve under `machine`.
 pub fn apply(
     lighting: &Lighting,
-    _machine: &MachineRoot,
+    machine: &MachineRoot,
     keyboard: &mut dyn KeyboardTransport,
 ) -> Result<()> {
     match lighting.backend {
         LightingBackend::UsbHid => keyboard.send(&usb_hid::packets(lighting)),
+        LightingBackend::FourZone => four_zone::write(lighting, machine),
     }
 }

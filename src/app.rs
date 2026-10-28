@@ -26,7 +26,7 @@ use crate::capabilities::{Capability, SenseInterface};
 use crate::doctor::{self, Membership, Report};
 use crate::hardware::{HardwareEvent, HardwareHandle, HardwareRequest, spawn_worker};
 use crate::keyboard::{KeyboardTransport, UsbAccess};
-use crate::lighting::{Lighting, Rgb, saved};
+use crate::lighting::{Detection, Lighting, Rgb, saved};
 use crate::machine::MachineRoot;
 use crate::models::{Battery, FanMode, SensorSnapshot};
 use crate::settings::{Change, LightingField, Section, Setting, SettingId, SettingsModel};
@@ -128,6 +128,8 @@ pub struct App {
     pub(crate) message: Option<StatusMessage>,
     pub(crate) sensors: Sensors,
     pub(crate) keyboard: UsbAccess,
+    /// What the last scan found for keyboard lighting.
+    pub(crate) detection: Detection,
     /// The laptop's DMI model name.
     pub(crate) model: Option<String>,
     /// The first settings-list line on screen; render keeps the selection in view.
@@ -177,6 +179,7 @@ impl App {
             message: None,
             sensors: Sensors::default(),
             keyboard: UsbAccess::NotFound,
+            detection: Detection::None,
             model: None,
             scroll: Cell::new(0),
             hits: RefCell::new(Vec::new()),
@@ -281,7 +284,8 @@ impl App {
                     self.snapshot_pending = false;
                     self.model = snapshot.model;
                     self.sensors.update(&snapshot.sensors);
-                    self.settings.lighting = snapshot.lighting.map(|backend| {
+                    self.detection = snapshot.lighting;
+                    self.settings.lighting = snapshot.lighting.backend().map(|backend| {
                         [self.settings.lighting.take(), self.last_lighting.clone()]
                             .into_iter()
                             .flatten()
@@ -559,6 +563,10 @@ impl App {
             }
             Change::CustomColour => {
                 self.overlay = Some(Overlay::Hex(String::new()));
+                return;
+            }
+            Change::Zone(_) => {
+                self.settings.apply(&change);
                 return;
             }
             Change::Write { capability, value } => {
