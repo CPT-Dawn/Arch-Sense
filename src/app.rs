@@ -8,7 +8,8 @@
 //! Lighting is the one exception to "at once": it shows at once, but reaches the
 //! keyboard only after input settles for [`LIGHTING_DEBOUNCE`], so holding an
 //! arrow key makes one write rather than dozens. Time here is whatever
-//! [`App::tick`] is told has passed, which keeps the debounce testable.
+//! [`App::tick`] is told has passed: it paces the debounce, sensor polling and
+//! how long a confirmation stays, which keeps all three testable.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -54,7 +55,8 @@ pub(crate) enum MessageLevel {
 pub(crate) struct StatusMessage {
     pub(crate) level: MessageLevel,
     pub(crate) text: String,
-    pub(crate) since: Instant,
+    /// When it was set, on the app clock.
+    since: Duration,
 }
 
 /// A modal drawn over the dashboard. While one is open it takes every key.
@@ -147,13 +149,14 @@ pub struct App {
     pending_lighting: Option<(Lighting, Duration)>,
     /// What the latest lighting change was, for its confirmation.
     lighting_note: Option<String>,
-    /// Time the app has been told has passed; drives the keyboard preview.
+    /// Time the app has been told has passed; the one clock everything here runs on.
     pub(crate) clock: Duration,
     hardware: HardwareHandle,
     /// The machine, for the Doctor (hardware I/O itself stays on the worker).
     machine: MachineRoot,
     snapshot_pending: bool,
-    last_snapshot_request: Instant,
+    /// When the last sensor poll was sent, on the app clock; `None` before the first.
+    last_snapshot_request: Option<Duration>,
     quit: bool,
 }
 
@@ -166,7 +169,6 @@ impl App {
             Err(error) => (None, Some(format!("✗ Saved Lighting ignored: {error:#}"))),
         };
         let hardware = spawn_worker(machine.clone(), Box::new(keyboard))?;
-        let now = Instant::now();
 
         let mut app = Self {
             settings: SettingsModel::default(),
@@ -189,7 +191,7 @@ impl App {
             hardware,
             machine,
             snapshot_pending: false,
-            last_snapshot_request: now - SNAPSHOT_INTERVAL,
+            last_snapshot_request: None,
             quit: false,
         };
         if let Some(warning) = saved_warning {
@@ -248,7 +250,10 @@ impl App {
             }
         }
 
-        if self.last_snapshot_request.elapsed() >= SNAPSHOT_INTERVAL {
+        let due = self
+            .last_snapshot_request
+            .is_none_or(|sent| self.clock.saturating_sub(sent) >= SNAPSHOT_INTERVAL);
+        if due {
             self.request_snapshot();
         }
     }
@@ -270,7 +275,7 @@ impl App {
         match self.hardware.send(HardwareRequest::Snapshot) {
             Ok(()) => {
                 self.snapshot_pending = true;
-                self.last_snapshot_request = Instant::now();
+                self.last_snapshot_request = Some(self.clock);
             }
             Err(error) => self.set_message(MessageLevel::Error, error.to_string()),
         }
@@ -662,7 +667,7 @@ impl App {
         self.message = Some(StatusMessage {
             level,
             text: text.into(),
-            since: Instant::now(),
+            since: self.clock,
         });
     }
 
@@ -670,7 +675,8 @@ impl App {
     /// errors stay until something replaces them.
     pub(crate) fn status(&self) -> Option<&StatusMessage> {
         self.message.as_ref().filter(|message| {
-            message.level == MessageLevel::Error || message.since.elapsed() < CONFIRMATION_TIME
+            message.level == MessageLevel::Error
+                || self.clock.saturating_sub(message.since) < CONFIRMATION_TIME
         })
     }
 

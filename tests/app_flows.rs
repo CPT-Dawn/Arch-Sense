@@ -1,6 +1,7 @@
 mod common;
 
 use std::fs;
+use std::time::Duration;
 
 use arch_sense::fixture::FakeMachine;
 use arch_sense::keyboard::RecordingTransport;
@@ -91,4 +92,47 @@ fn a_laptop_without_a_keyboard_has_no_lighting_section() {
 
     assert!(!app.screen().contains("LIGHTING"));
     assert!(!app.setting_labels().contains(&"Effect".to_string()));
+}
+
+#[test]
+fn a_confirmation_fades_once_four_seconds_have_passed_on_the_app_clock() {
+    let fake = FakeMachine::builder()
+        .predator_sense()
+        .build()
+        .expect("fake machine");
+    let mut app = Harness::start(&fake, RecordingTransport::default());
+    app.wait_for_scan();
+
+    app.press(KeyCode::Right);
+    app.wait_until("the footer confirmation", |app| {
+        app.screen().contains("✓ Thermal Profile → Performance")
+    });
+
+    app.advance(Duration::from_secs(3));
+    assert!(app.screen().contains("✓ Thermal Profile → Performance"));
+    app.advance(Duration::from_secs(1));
+    assert!(!app.screen().contains("✓ Thermal Profile → Performance"));
+}
+
+#[test]
+fn an_error_stays_in_the_footer_however_long_it_has_been() {
+    let fake = FakeMachine::builder()
+        .predator_sense()
+        .read_only(|m| m.platform_profile())
+        .build()
+        .expect("fake machine");
+    if fs::write(fake.machine().platform_profile(), "balanced").is_ok() {
+        eprintln!("skipped: root ignores read-only files");
+        return;
+    }
+    let mut app = Harness::start(&fake, RecordingTransport::default());
+    app.wait_for_scan();
+
+    app.press(KeyCode::Right);
+    app.wait_until("the error", |app| {
+        app.screen().contains("✗ Couldn't set Thermal Profile")
+    });
+
+    app.advance(Duration::from_secs(60));
+    assert!(app.screen().contains("✗ Couldn't set Thermal Profile"));
 }
