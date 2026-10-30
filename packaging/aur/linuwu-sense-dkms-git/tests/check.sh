@@ -37,7 +37,7 @@ check_srcinfo() {
   expect "depends on dkms" grep -q $'^\tdepends = dkms' <<<"$info"
   expect "arch is any" grep -q $'^\tarch = any$' <<<"$info"
   expect "sources upstream Linuwu-Sense via git" grep -q 'source = .*git+https://github.com/0x7375646F/Linuwu-Sense' <<<"$info"
-  expect "maintainer is CPT_Dawn" grep -q '^# Maintainer: CPT_Dawn <dev@cptdawn.dev>' "$here/PKGBUILD"
+  expect "maintainer is CPT_Dawn" grep -q '^# Maintainer: CPT_Dawn <ping@cptdawn.dev>' "$here/PKGBUILD"
 }
 
 build_package() { # build once, extract to $work/root; sets $pkgfile, $ver, $root

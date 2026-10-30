@@ -99,7 +99,7 @@ jobs:
                       exit 0
                   fi
                   pkgver=$(sed -n 's/^pkgver=//p' PKGBUILD)
-                  git -c user.name="CPT_Dawn" -c user.email="dev@cptdawn.dev" \
+                  git -c user.name="CPT_Dawn" -c user.email="ping@cptdawn.dev" \
                       commit -m "arch-sense: update to ${pkgver}"
                   git push origin HEAD:master
 
@@ -118,6 +118,6 @@ jobs:
                       echo "Checked-in PKGBUILD already matches."
                       exit 0
                   fi
-                  git -c user.name="CPT_Dawn" -c user.email="dev@cptdawn.dev" \
+                  git -c user.name="CPT_Dawn" -c user.email="ping@cptdawn.dev" \
                       commit -m "chore(aur): bump arch-sense PKGBUILD to ${TAG#v}"
                   git push origin "HEAD:$DEFAULT_BRANCH"
