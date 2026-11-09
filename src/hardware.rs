@@ -1,11 +1,12 @@
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
@@ -145,9 +146,12 @@ fn worker_loop(
     tx: Sender<HardwareEvent>,
 ) {
     let m = &machine;
+    let mut nvidia_smi = NvidiaSmiGate::default();
     for request in rx {
         let event = match request {
-            HardwareRequest::Snapshot => HardwareEvent::Snapshot(Box::new(collect_snapshot(m))),
+            HardwareRequest::Snapshot => {
+                HardwareEvent::Snapshot(Box::new(collect_snapshot(m, &mut nvidia_smi)))
+            }
             HardwareRequest::Write { capability, value } => {
                 match write_capability(m, capability, &value) {
                     Ok(()) => HardwareEvent::Written { capability, value },
@@ -186,7 +190,10 @@ fn apply_lighting(
     }
 }
 
-pub(crate) fn collect_snapshot(m: &MachineRoot) -> HardwareSnapshot {
+pub(crate) fn collect_snapshot(
+    m: &MachineRoot,
+    nvidia_smi: &mut NvidiaSmiGate,
+) -> HardwareSnapshot {
     let laptop = detect(m);
     let values = laptop
         .capabilities()
@@ -196,7 +203,7 @@ pub(crate) fn collect_snapshot(m: &MachineRoot) -> HardwareSnapshot {
             read_sysfs(&path).ok().map(|value| (capability, value))
         })
         .collect();
-    let sensors = read_sensors(m, &laptop);
+    let sensors = read_sensors(m, &laptop, nvidia_smi);
     let keyboard = keyboard_access(m);
     let lighting = lighting::detect(m);
     let model = read_optional_string(&m.dmi_product_name());
@@ -226,12 +233,16 @@ fn write_capability(m: &MachineRoot, capability: Capability, value: &str) -> Res
     })
 }
 
-fn read_sensors(m: &MachineRoot, laptop: &Laptop) -> SensorSnapshot {
+fn read_sensors(
+    m: &MachineRoot,
+    laptop: &Laptop,
+    nvidia_smi: &mut NvidiaSmiGate,
+) -> SensorSnapshot {
     let (cpu_fan, gpu_fan, cpu_fan_mode, gpu_fan_mode) = read_fan_telemetry(m, laptop);
 
     SensorSnapshot {
         cpu_temp: read_cpu_temp(m),
-        gpu_temp: read_gpu_temp(m),
+        gpu_temp: read_gpu_temp(m, nvidia_smi),
         cpu_fan,
         gpu_fan,
         cpu_fan_mode,
@@ -298,7 +309,7 @@ fn read_cpu_temp(m: &MachineRoot) -> SensorMetric {
     }
 }
 
-fn read_gpu_temp(m: &MachineRoot) -> SensorMetric {
+fn read_gpu_temp(m: &MachineRoot, nvidia_smi: &mut NvidiaSmiGate) -> SensorMetric {
     let hwmon = read_hwmon_temperature(m, SensorRole::Gpu);
     if let Ok(value) = hwmon {
         return SensorMetric::available(value);
@@ -306,7 +317,7 @@ fn read_gpu_temp(m: &MachineRoot) -> SensorMetric {
 
     let hwmon_error = hwmon.err().map(|error| error.to_string());
 
-    match read_gpu_temp_from_nvidia_smi(m) {
+    match nvidia_smi.read(m) {
         Ok(value) => SensorMetric::available(value),
         Err(error) => {
             let detail = match hwmon_error {
@@ -318,34 +329,99 @@ fn read_gpu_temp(m: &MachineRoot) -> SensorMetric {
     }
 }
 
-fn read_gpu_temp_from_nvidia_smi(m: &MachineRoot) -> Result<f64> {
-    match Command::new(m.nvidia_smi())
+/// How long one `nvidia-smi` call may run before it is killed.
+const NVIDIA_SMI_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long to leave `nvidia-smi` alone after it timed out.
+const NVIDIA_SMI_BACKOFF: Duration = Duration::from_secs(30);
+
+/// Owned by the hardware worker: remembers a recent `nvidia-smi` timeout so a
+/// wedged driver costs one 2 s wait per backoff window, not one per snapshot.
+#[derive(Default)]
+pub(crate) struct NvidiaSmiGate {
+    retry_at: Option<Instant>,
+}
+
+impl NvidiaSmiGate {
+    fn read(&mut self, m: &MachineRoot) -> Result<f64> {
+        if self.retry_at.is_some_and(|at| Instant::now() < at) {
+            bail!("{NVIDIA_SMI_TIMED_OUT}");
+        }
+        self.retry_at = None;
+        let result = read_gpu_temp_from_nvidia_smi(m, NVIDIA_SMI_TIMEOUT);
+        if matches!(&result, Err(error) if error.to_string() == NVIDIA_SMI_TIMED_OUT) {
+            self.retry_at = Some(Instant::now() + NVIDIA_SMI_BACKOFF);
+        }
+        result
+    }
+}
+
+const NVIDIA_SMI_TIMED_OUT: &str = "nvidia-smi timed out";
+
+fn read_gpu_temp_from_nvidia_smi(m: &MachineRoot, timeout: Duration) -> Result<f64> {
+    let mut child = match Command::new(m.nvidia_smi())
         .args([
             "--query-gpu=temperature.gpu",
             "--format=csv,noheader,nounits",
         ])
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
     {
-        Ok(output) if output.status.success() => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            // One line per GPU; the first is the one the card shows.
-            let raw = stdout.lines().next().unwrap_or_default().trim().to_string();
-            raw.parse::<f64>()
-                .with_context(|| format!("parsing GPU temperature from nvidia-smi output '{raw}'"))
-        }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let detail = if stderr.is_empty() {
-                format!("nvidia-smi exited with {}", output.status)
-            } else {
-                format!("nvidia-smi failed: {stderr}")
-            };
-            bail!("{detail}")
-        }
+        Ok(child) => child,
         Err(error) if error.kind() == ErrorKind::NotFound => {
             bail!("nvidia-smi is not installed")
         }
         Err(error) => bail!("starting nvidia-smi failed: {error}"),
+    };
+
+    // Drain the pipes on threads so a chatty child cannot block on a full pipe.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as _));
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!("{NVIDIA_SMI_TIMED_OUT}");
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!("waiting for nvidia-smi failed: {error}");
+            }
+        }
+    };
+    let stdout = stdout.join().unwrap_or_default();
+    let stderr = stderr.join().unwrap_or_default();
+
+    if status.success() {
+        let stdout = String::from_utf8_lossy(&stdout);
+        // One line per GPU; the first is the one the card shows.
+        let raw = stdout.lines().next().unwrap_or_default().trim().to_string();
+        raw.parse::<f64>()
+            .with_context(|| format!("parsing GPU temperature from nvidia-smi output '{raw}'"))
+    } else {
+        let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
+        let detail = if stderr.is_empty() {
+            format!("nvidia-smi exited with {status}")
+        } else {
+            format!("nvidia-smi failed: {stderr}")
+        };
+        bail!("{detail}")
     }
 }
 

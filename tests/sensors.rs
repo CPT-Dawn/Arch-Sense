@@ -2,8 +2,14 @@
 
 mod common;
 
+use std::fs;
+use std::process::Command;
+use std::time::{Duration, Instant};
+
 use arch_sense::fixture::{FakeMachine, FakeMachineBuilder};
 use arch_sense::keyboard::RecordingTransport;
+
+use crossterm::event::KeyCode;
 
 use common::Harness;
 
@@ -232,4 +238,52 @@ fn a_narrow_battery_card_never_shows_watts_without_their_unit() {
     app.wait_until("the battery", |app| app.screen().contains("On battery"));
 
     assert!(app.screen().contains("On battery 45 W"), "{}", app.screen());
+}
+
+#[test]
+fn a_hung_nvidia_smi_cannot_stall_the_hardware_worker() {
+    let fake = FakeMachine::builder()
+        .predator_sense()
+        .intel_cpu(50)
+        .nvidia_smi_hangs()
+        .build()
+        .expect("fake machine");
+    let mut app = Harness::start(&fake, RecordingTransport::default());
+    let started = Instant::now();
+    app.wait_for_scan();
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "first scan took {:?}",
+        started.elapsed()
+    );
+
+    let screen = app.screen();
+    let cards: String = screen
+        .lines()
+        .skip(1)
+        .take(5)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(cards.contains("unavailable"), "{cards}");
+
+    let write_started = Instant::now();
+    app.press(KeyCode::Right);
+    let profile = fake.machine().platform_profile();
+    app.wait_until("the profile write", |_| {
+        fs::read_to_string(&profile).unwrap() == "performance"
+    });
+    assert!(
+        write_started.elapsed() < Duration::from_secs(5),
+        "write took {:?}",
+        write_started.elapsed()
+    );
+
+    let leftovers = Command::new("pgrep")
+        .args(["-fx", "sleep 30"])
+        .output()
+        .expect("pgrep");
+    assert!(
+        leftovers.stdout.is_empty(),
+        "the timed-out nvidia-smi was not reaped"
+    );
 }

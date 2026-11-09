@@ -214,6 +214,11 @@ impl FakeMachineBuilder {
         )
     }
 
+    /// An `nvidia-smi` that never answers, like one stuck on a wedged driver.
+    pub fn nvidia_smi_hangs(self) -> Self {
+        self.executable(MachineRoot::nvidia_smi, "#!/bin/sh\nexec sleep 30\n")
+    }
+
     /// Linuwu-Sense's own unlabelled `acer` chip: temp1 is the CPU, temp2 the GPU,
     /// fan1 the CPU fan and fan2 the GPU fan.
     pub fn acer_sensors(self, cpu: u32, gpu: u32, cpu_fan: u32, gpu_fan: u32) -> Self {
