@@ -20,10 +20,12 @@ const A_MOMENT: Duration = Duration::from_millis(60);
 /// Longer than the debounce.
 const SETTLED: Duration = Duration::from_millis(400);
 
+// Fields drop in order: the app (which flushes pending lighting) before the fake
+// machine it writes into, or the flush recreates the deleted temp folder.
 struct Lit {
-    _fake: FakeMachine,
     app: Harness,
     keyboard: RecordingTransport,
+    _fake: FakeMachine,
 }
 
 /// Starts the app on a Predator with the USB HID keyboard, `saved` as its
@@ -390,4 +392,34 @@ fn clicking_an_effect_or_direction_picks_it() {
     let (x, y) = lit.app.find_in_row("Direction", "Down").expect("Down");
     lit.app.click(x, y);
     assert_eq!(lit.app.highlighted("Direction").as_deref(), Some("Down"));
+}
+
+/// A keyboard that refuses every transaction the way libusb does, wrapped in context.
+struct DeniedKeyboard;
+
+impl arch_sense::keyboard::KeyboardTransport for DeniedKeyboard {
+    fn send(&mut self, _packets: &[Packet]) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!("Access denied").context("USB transfer failed"))
+    }
+}
+
+#[test]
+fn a_lighting_failure_shows_its_cause() {
+    let fake = FakeMachine::builder()
+        .predator_sense()
+        .usb_hid_keyboard()
+        .build()
+        .expect("fake machine");
+    let mut app = Harness::start(&fake, DeniedKeyboard);
+    app.wait_until("the Lighting section", |app| {
+        app.setting_labels().contains(&"Brightness".to_string())
+    });
+    select(&mut app, "Brightness");
+    app.press(KeyCode::Left);
+    app.advance(SETTLED);
+
+    app.wait_until("the failure", |app| {
+        app.screen().contains("Lighting failed")
+    });
+    assert!(app.screen().contains("Access denied"), "{}", app.screen());
 }

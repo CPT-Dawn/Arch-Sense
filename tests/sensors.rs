@@ -156,3 +156,80 @@ fn the_turbo_indicator_shows_only_when_the_laptop_has_a_turbo_key() {
         header(&none)
     );
 }
+
+#[test]
+fn an_intel_cpu_shows_the_package_not_whichever_core_is_listed_last() {
+    // coretemp's Package and Cores score alike and sysfs order is arbitrary; the
+    // Package is created last here so it isn't the last one listed.
+    let cards = cards(FakeMachine::builder().predator_sense().hwmon(
+        0,
+        "coretemp",
+        &[
+            ("temp2_input", "51000"),
+            ("temp2_label", "Core 0"),
+            ("temp3_input", "52000"),
+            ("temp3_label", "Core 4"),
+            ("temp1_input", "80000"),
+            ("temp1_label", "Package id 0"),
+        ],
+    ));
+
+    assert!(cards.contains("80°C"), "{cards}");
+}
+
+#[test]
+fn an_amd_gpu_shows_edge_not_whichever_sensor_is_listed_last() {
+    let cards = cards(FakeMachine::builder().predator_sense().intel_cpu(55).hwmon(
+        1,
+        "amdgpu",
+        &[
+            ("temp3_input", "71000"),
+            ("temp3_label", "mem"),
+            ("temp2_input", "63000"),
+            ("temp2_label", "junction"),
+            ("temp1_input", "48000"),
+            ("temp1_label", "edge"),
+        ],
+    ));
+
+    assert!(cards.contains("48°C"), "{cards}");
+}
+
+#[test]
+fn a_ryzen_laptop_with_an_nvidia_card_shows_the_dgpu_not_the_igpu() {
+    // amdgpu is the integrated Radeon here; Linuwu-Sense's acer temp2 is the dGPU.
+    let cards = cards(
+        FakeMachine::builder()
+            .predator_sense()
+            .amd_cpu(60)
+            .amd_gpu(41)
+            .acer_sensors(60, 72, 2000, 2100),
+    );
+
+    assert!(cards.contains("72°C"), "{cards}");
+    assert!(!cards.contains("41°C"), "{cards}");
+}
+
+#[test]
+fn a_lone_gpu_fan_is_not_shown_as_the_cpu_fan() {
+    let cards = cards(FakeMachine::builder().predator_sense().intel_cpu(55).hwmon(
+        1,
+        "amdgpu",
+        &[("fan1_input", "1800")],
+    ));
+
+    assert!(cards.contains("— / 1800 rpm"), "{cards}");
+}
+
+#[test]
+fn a_narrow_battery_card_never_shows_watts_without_their_unit() {
+    let fake = FakeMachine::builder()
+        .predator_sense()
+        .battery(60, "Discharging", 45_200_000)
+        .build()
+        .expect("fake machine");
+    let mut app = Harness::start_sized(&fake, RecordingTransport::default(), 80, 24);
+    app.wait_until("the battery", |app| app.screen().contains("On battery"));
+
+    assert!(app.screen().contains("On battery 45 W"), "{}", app.screen());
+}

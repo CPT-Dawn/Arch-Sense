@@ -272,7 +272,8 @@ impl FakeMachineBuilder {
         Ok(FakeMachine { dir })
     }
 
-    fn hwmon(self, index: usize, name: &str, files: &[(&str, &str)]) -> Self {
+    /// A hwmon chip `hwmon<index>` called `name`, with `files` written in order.
+    pub fn hwmon(self, index: usize, name: &str, files: &[(&str, &str)]) -> Self {
         let chip = move |m: &MachineRoot| m.hwmon_dir().join(format!("hwmon{index}"));
         let mut builder = self.file(move |m| chip(m).join("name"), name);
         for (file, value) in files {

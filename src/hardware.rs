@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
@@ -177,11 +178,11 @@ fn apply_lighting(
     keyboard: &mut dyn KeyboardTransport,
 ) -> HardwareEvent {
     if let Err(error) = lighting::apply(lighting, m, keyboard) {
-        return HardwareEvent::LightingFailed(error.to_string());
+        return HardwareEvent::LightingFailed(format!("{error:#}"));
     }
     match saved::save(m, lighting) {
         Ok(()) => HardwareEvent::LightingApplied,
-        Err(error) => HardwareEvent::LightingNotSaved(error.to_string()),
+        Err(error) => HardwareEvent::LightingNotSaved(format!("{error:#}")),
     }
 }
 
@@ -432,7 +433,9 @@ fn select_fan_sample_indices(samples: &[HwmonFanSample]) -> (Option<usize>, Opti
         return (None, None);
     }
 
-    let cpu = best_fan_index(samples, SensorRole::Cpu, None).or(Some(0));
+    // An unlabelled fan counts as the CPU fan, but not one that is plainly a GPU's.
+    let cpu = best_fan_index(samples, SensorRole::Cpu, None)
+        .filter(|&index| fan_score(&samples[index], SensorRole::Cpu) >= 0);
     let gpu = best_fan_index(samples, SensorRole::Gpu, cpu).or_else(|| {
         samples
             .iter()
@@ -607,12 +610,15 @@ fn collect_hwmon_temp_samples(m: &MachineRoot) -> Result<Vec<HwmonTempSample>> {
 }
 
 fn best_temp_index(samples: &[HwmonTempSample], role: SensorRole) -> Option<usize> {
+    // Ties are common (coretemp's Package and every Core, amdgpu's edge and
+    // junction and mem), and sysfs lists files in no particular order. The lowest
+    // channel wins a tie: temp1 is the Package, Tctl or edge on every driver.
     samples
         .iter()
         .enumerate()
         .map(|(index, sample)| (index, temperature_score(sample, role)))
         .filter(|&(_, score)| score > 0)
-        .max_by_key(|&(_, score)| score)
+        .min_by_key(|&(index, score)| (Reverse(score), samples[index].index, index))
         .map(|(index, _)| index)
 }
 
@@ -648,15 +654,17 @@ fn temperature_score(sample: &HwmonTempSample, role: SensorRole) -> i32 {
 }
 
 /// Linuwu-Sense's `acer` hwmon chip has no labels: channel 1 is the CPU and
-/// channel 2 the GPU, for temperatures and fans alike. The bonus stays below a
-/// keyword match, so a labelled `coretemp` or `amdgpu` still wins.
+/// channel 2 the GPU, for temperatures and fans alike. For the CPU the bonus stays
+/// below a keyword match, so a labelled `coretemp` or `k10temp` still wins. For the
+/// GPU it beats one: `amdgpu` may be the integrated Radeon of a Ryzen laptop, while
+/// the EC's channel 2 is always the discrete card.
 fn acer_channel_score(hwmon_name: &str, index: usize, role: SensorRole) -> i32 {
-    let channel = match role {
-        SensorRole::Cpu => 1,
-        SensorRole::Gpu => 2,
+    let (channel, bonus) = match role {
+        SensorRole::Cpu => (1, 5),
+        SensorRole::Gpu => (2, 11),
     };
     if hwmon_name == "acer" && index == channel {
-        5
+        bonus
     } else {
         0
     }

@@ -98,10 +98,9 @@ fn battery_card(frame: &mut Frame, area: Rect, app: &App, limit: Option<&str>) {
         return;
     };
 
-    let state = match battery.watts {
-        Some(watts) if watts >= 0.05 => format!("{} {watts:.1} W", battery.state.label()),
-        _ => battery.state.label().to_string(),
-    };
+    // The body is the card less its border and a column of padding either side.
+    let width = usize::from(area.width.saturating_sub(4));
+    let state = battery_state(battery.state.label(), battery.watts, width);
     let lines = vec![
         Line::styled(state, Style::new().fg(Theme::TEXT)),
         Line::styled(limit.unwrap_or_default().to_string(), dim),
@@ -119,6 +118,22 @@ fn battery_card(frame: &mut Frame, area: Rect, app: &App, limit: Option<&str>) {
         colour,
         Body::Text(Text::from(lines)),
     );
+}
+
+/// The state and power draw, in the most detail that fits `width`. A narrow card
+/// rounds the watts and then drops them, but never shows a number without its unit.
+fn battery_state(label: &str, watts: Option<f64>, width: usize) -> String {
+    let Some(watts) = watts.filter(|&watts| watts >= 0.05) else {
+        return label.to_string();
+    };
+    [
+        format!("{label} {watts:.1} W"),
+        format!("{label} {watts:.0} W"),
+        format!("{label} {watts:.0}W"),
+    ]
+    .into_iter()
+    .find(|text| text.chars().count() <= width)
+    .unwrap_or_else(|| label.to_string())
 }
 
 fn temperature_card(
@@ -192,6 +207,9 @@ fn card(
             frame.render_widget(
                 LineGauge::default()
                     .ratio(ratio.clamp(0.0, 1.0))
+                    // Distinct glyphs, so the reading survives NO_COLOR.
+                    .filled_symbol("━")
+                    .unfilled_symbol("─")
                     .filled_style(Style::new().fg(colour))
                     .unfilled_style(Style::new().fg(Theme::LINE))
                     .label(""),

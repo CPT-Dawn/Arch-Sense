@@ -200,3 +200,46 @@ fn colour_mode_comes_from_an_injected_environment_reader() {
     // Per no-color.org, an empty NO_COLOR doesn't count.
     assert_eq!(detect(&[("NO_COLOR", "")]), ColorMode::Ansi16);
 }
+
+fn screen_text(laptop: FakeMachineBuilder, mode: ColorMode) -> Vec<String> {
+    let fake = laptop.build().unwrap();
+    let mut app = App::new(fake.machine(), RecordingTransport::default()).unwrap();
+    app.set_color_mode(mode);
+    let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+    let started = Instant::now();
+    loop {
+        app.tick(Duration::from_millis(10));
+        terminal.draw(|f| app.render(f)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows: Vec<String> = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect()
+            })
+            .collect();
+        if rows.iter().any(|r| r.contains("rpm")) || started.elapsed() > Duration::from_secs(5) {
+            return rows;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn no_color_still_shows_how_full_the_fans_gauge_is() {
+    let fans = |rpm| {
+        screen_text(
+            FakeMachine::builder()
+                .predator_sense()
+                .acer_sensors(50, 50, rpm, rpm),
+            ColorMode::None,
+        )
+    };
+    let (idle, flat_out) = (fans(0), fans(6000));
+    let gauge_rows_differ = idle
+        .iter()
+        .zip(&flat_out)
+        .any(|(a, b)| a != b && !a.contains("rpm"));
+
+    assert!(gauge_rows_differ, "{}", flat_out.join("\n"));
+}
