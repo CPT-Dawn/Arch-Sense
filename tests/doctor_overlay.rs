@@ -108,3 +108,23 @@ fn a_doctor_result_that_lands_after_the_overlay_closed_stays_closed() {
     }
     assert!(app.is_running());
 }
+
+#[test]
+fn scrolling_back_up_from_the_bottom_moves_at_once() {
+    for key in [KeyCode::Up, KeyCode::PageUp] {
+        let fake = FakeMachine::builder()
+            .module_missing()
+            .build()
+            .expect("fake machine");
+        let mut app = Harness::start_sized(&fake, RecordingTransport::default(), 80, 24);
+        app.wait_for_scan();
+        app.press(KeyCode::Char('d'));
+        app.wait_until("the Doctor's checks", |app| {
+            app.screen().contains("✗ Kernel module")
+        });
+        app.press_n(KeyCode::Down, 40);
+        let bottom = app.screen();
+        app.press(key);
+        assert_ne!(bottom, app.screen(), "{key:?} should scroll at once");
+    }
+}

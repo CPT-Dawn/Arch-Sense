@@ -14,7 +14,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
         Some(Overlay::ConfirmCalibration) => confirm_calibration(frame, area),
         Some(Overlay::Hex(digits)) => custom_colour(frame, area, digits),
         Some(Overlay::Doctor { report, scroll }) => {
-            super::doctor::draw(frame, area, report.as_ref(), *scroll)
+            super::doctor::draw(frame, area, report.as_ref(), *scroll, &app.doctor_overflow)
         }
         Some(Overlay::Help) => help(frame, area),
     }

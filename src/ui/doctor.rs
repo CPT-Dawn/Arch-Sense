@@ -5,12 +5,20 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
 use super::overlay::modal;
+use std::cell::Cell;
+
 use crate::doctor::{Report, Status};
 use crate::theme::Theme;
 
 const MAX_WIDTH: u16 = 104;
 
-pub(super) fn draw(frame: &mut Frame, area: Rect, report: Option<&Report>, scroll: u16) {
+pub(super) fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    report: Option<&Report>,
+    scroll: u16,
+    max_scroll: &Cell<u16>,
+) {
     // Borders and modal padding take 6 columns and 3 rows; the key hint takes a row.
     let width = area.width.saturating_sub(4).min(MAX_WIDTH);
     let lines = match report {
@@ -27,6 +35,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, report: Option<&Report>, scrol
     let overflow = u16::try_from(lines.len())
         .unwrap_or(u16::MAX)
         .saturating_sub(body.height);
+    max_scroll.set(overflow);
     let scroll = scroll.min(overflow);
     frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), body);
 

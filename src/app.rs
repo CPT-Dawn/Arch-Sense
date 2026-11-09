@@ -138,6 +138,8 @@ pub struct App {
     pub(crate) model: Option<String>,
     /// The first settings-list line on screen; render keeps the selection in view.
     pub(crate) scroll: Cell<usize>,
+    /// How far the Doctor overlay can scroll, as the last render measured it.
+    pub(crate) doctor_overflow: Cell<u16>,
     /// Clickable areas recorded by the last render.
     pub(crate) hits: RefCell<Vec<(Rect, Hit)>>,
     /// The last value each Capability was confirmed to hold, to roll back to.
@@ -180,6 +182,7 @@ impl App {
             detection: Detection::None,
             model: None,
             scroll: Cell::new(0),
+            doctor_overflow: Cell::new(0),
             hits: RefCell::new(Vec::new()),
             confirmed: BTreeMap::new(),
             in_flight: HashMap::new(),
@@ -504,9 +507,10 @@ impl App {
         match overlay {
             Overlay::Hex(digits) => self.on_hex_key(digits, key),
             Overlay::Doctor { report, scroll } => {
-                // A loose cap; the overlay clamps to what's actually left to show.
-                let checks = report.as_ref().map_or(0, |report| report.checks().len());
-                let limit = u16::try_from(checks * 4).unwrap_or(u16::MAX);
+                // The renderer measured the real overflow; never store past it,
+                // or Up would spend keypresses undoing overscroll.
+                let limit = self.doctor_overflow.get();
+                let scroll = scroll.min(limit);
                 let scroll = match key.code {
                     KeyCode::Char('q') | KeyCode::Char('d') => {
                         self.overlay = None;
