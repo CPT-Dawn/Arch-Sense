@@ -46,6 +46,11 @@ impl Harness {
         Self { app, terminal }
     }
 
+    /// Makes the app quit on its next tick once `flag` is set, as a signal would.
+    pub fn watch_shutdown(&mut self, flag: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.app.watch_shutdown(flag);
+    }
+
     /// Resizes the terminal, as if the user dragged the window.
     pub fn resize(&mut self, width: u16, height: u16) {
         self.terminal.backend_mut().resize(width, height);

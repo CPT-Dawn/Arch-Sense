@@ -93,6 +93,7 @@ dependencies = [
  "rusb",
  "serde",
  "serde_json",
+ "signal-hook",
  "tempfile",
 ]
 

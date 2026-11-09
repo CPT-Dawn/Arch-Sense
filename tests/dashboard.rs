@@ -388,3 +388,21 @@ fn a_second_enter_does_not_confirm_battery_calibration() {
     app.wait_until("a later write", |_| read(&usb_charging) == "10");
     assert_eq!(read(&calibration), "0");
 }
+
+#[test]
+fn a_shutdown_signal_quits_on_the_next_tick() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    let (_fake, mut app) = start(FakeMachine::builder().predator_sense());
+    let flag = Arc::new(AtomicBool::new(false));
+    app.watch_shutdown(flag.clone());
+
+    app.advance(Duration::from_millis(50));
+    assert!(app.is_running());
+
+    flag.store(true, Ordering::Relaxed);
+    app.advance(Duration::from_millis(50));
+    assert!(!app.is_running());
+}

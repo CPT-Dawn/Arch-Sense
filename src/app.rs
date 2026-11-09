@@ -14,6 +14,8 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -160,6 +162,8 @@ pub struct App {
     /// When the last sensor poll was sent, on the app clock; `None` before the first.
     last_snapshot_request: Option<Duration>,
     quit: bool,
+    /// Set from a signal handler (SIGTERM, SIGHUP, SIGINT) to ask for a normal quit.
+    shutdown: Option<Arc<AtomicBool>>,
 }
 
 impl App {
@@ -191,6 +195,7 @@ impl App {
             snapshot_pending: false,
             last_snapshot_request: None,
             quit: false,
+            shutdown: None,
         };
         // Queued ahead of the first scan, so the Saved Lighting is in hand by
         // the time the scan says which keyboard there is to show it on.
@@ -223,6 +228,11 @@ impl App {
         Ok(())
     }
 
+    /// Quits on the next tick once `flag` is set, so a signal takes the normal exit path.
+    pub fn watch_shutdown(&mut self, flag: Arc<AtomicBool>) {
+        self.shutdown = Some(flag);
+    }
+
     /// Sets how many colours to draw with.
     pub fn set_color_mode(&mut self, mode: ColorMode) {
         self.color_mode = mode;
@@ -241,6 +251,13 @@ impl App {
     /// Applies finished hardware work and schedules the next poll.
     pub fn tick(&mut self, dt: Duration) {
         self.clock += dt;
+        if self
+            .shutdown
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::Relaxed))
+        {
+            self.quit = true;
+        }
         self.handle_hardware_events();
 
         if let Some((_, quiet)) = &mut self.pending_lighting {

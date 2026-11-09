@@ -6,7 +6,6 @@
 //! The directory is deleted when the [`Demo`] is dropped.
 
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -20,7 +19,6 @@ use crate::fixture::FakeMachine;
 use crate::keyboard::RecordingTransport;
 use crate::lighting::{self, Colour, LightingBackend, Rgb};
 use crate::machine::MachineRoot;
-use crate::theme::ColorMode;
 
 /// The model the demo laptop reports.
 pub const MODEL: &str = "Predator PH16-71";
@@ -165,13 +163,7 @@ pub fn run() -> Result<()> {
         })
     };
 
-    let mut app = App::new(machine, RecordingTransport::default())?;
-    app.set_color_mode(ColorMode::detect(|name| std::env::var(name).ok()));
-    let terminal = ratatui::init();
-    let _ = crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture);
-    let result = app.run(terminal); // the app drops inside, flushing its last write
-    let _ = crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture);
-    ratatui::restore();
+    let result = crate::run_app(App::new(machine, RecordingTransport::default())?);
 
     stop.store(true, Ordering::Relaxed);
     let demo = drifter.join(); // dropping it deletes the tree
