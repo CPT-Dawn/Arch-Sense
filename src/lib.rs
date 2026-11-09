@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
-use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+use signal_hook::consts::{SIGINT, SIGTERM};
 
 use app::App;
 use keyboard::KeyboardTransport;
@@ -30,12 +30,16 @@ pub fn run(machine: MachineRoot, keyboard: impl KeyboardTransport + 'static) -> 
     run_app(App::new(machine, keyboard)?)
 }
 
-/// Runs `app` on the real terminal. SIGTERM, SIGHUP and SIGINT quit through the
-/// normal path, so the terminal is restored and the app (and any demo tree) cleaned up.
+/// Runs `app` on the real terminal. SIGTERM and SIGINT quit through the normal
+/// path, so the terminal is restored and the app (and any demo tree) cleaned up.
+///
+/// SIGHUP keeps its default and ends the process: the terminal is gone, so there
+/// is nothing to restore, and crossterm spins forever reading a hung-up tty, so a
+/// caught SIGHUP would leave the app running at full CPU with no way to quit.
 pub(crate) fn run_app(mut app: App) -> Result<()> {
     app.set_color_mode(theme::ColorMode::detect(|name| std::env::var(name).ok()));
     let shutdown = Arc::new(AtomicBool::new(false));
-    for signal in [SIGTERM, SIGHUP, SIGINT] {
+    for signal in [SIGTERM, SIGINT] {
         signal_hook::flag::register(signal, Arc::clone(&shutdown))?;
     }
     app.watch_shutdown(shutdown);

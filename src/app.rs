@@ -162,7 +162,7 @@ pub struct App {
     /// When the last sensor poll was sent, on the app clock; `None` before the first.
     last_snapshot_request: Option<Duration>,
     quit: bool,
-    /// Set from a signal handler (SIGTERM, SIGHUP, SIGINT) to ask for a normal quit.
+    /// Set from a signal handler (SIGTERM, SIGINT) to ask for a normal quit.
     shutdown: Option<Arc<AtomicBool>>,
 }
 
