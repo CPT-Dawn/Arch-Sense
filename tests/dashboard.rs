@@ -363,3 +363,28 @@ fn ctrl_c_quits_even_from_a_dialog() {
 
     assert!(!app.is_running());
 }
+
+#[test]
+fn a_second_enter_does_not_confirm_battery_calibration() {
+    // Enter opens the dialog; a key repeat or double tap must not also confirm it.
+    let (fake, mut app) = start(FakeMachine::builder().predator_sense());
+    let calibration = fake.machine().predator_sense_attr("battery_calibration");
+    app.press(KeyCode::Tab);
+    app.press_n(KeyCode::Down, 2);
+    assert_eq!(app.selected_setting().as_deref(), Some("Calibrate battery"));
+
+    app.press(KeyCode::Enter);
+    app.press(KeyCode::Enter);
+
+    assert!(
+        app.screen().contains("Calibrate battery?"),
+        "{}",
+        app.screen()
+    );
+    app.press(KeyCode::Esc);
+    app.press(KeyCode::Up);
+    app.press(KeyCode::Right);
+    let usb_charging = fake.machine().predator_sense_attr("usb_charging");
+    app.wait_until("a later write", |_| read(&usb_charging) == "10");
+    assert_eq!(read(&calibration), "0");
+}

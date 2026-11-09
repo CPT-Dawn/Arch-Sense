@@ -527,7 +527,7 @@ impl App {
                 }
             }
             Overlay::ConfirmCalibration => match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
                     self.overlay = None;
                     let change = Change::Write {
                         capability: Capability::BatteryCalibration,
