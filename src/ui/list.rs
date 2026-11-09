@@ -223,15 +223,18 @@ struct Builder<'a> {
     id: SettingId,
     x: u16,
     y: u16,
+    /// First column past the drawn control; hit areas never reach it.
+    right: u16,
     spans: Vec<Span<'static>>,
 }
 
 impl Builder<'_> {
     fn push(&mut self, span: Span<'static>, option: Option<usize>) {
         let width = span.width() as u16;
-        if let Some(option) = option {
+        let drawn = width.min(self.right.saturating_sub(self.x));
+        if let Some(option) = option.filter(|_| drawn > 0) {
             self.app.record_hit(
-                Rect::new(self.x, self.y, width, 1),
+                Rect::new(self.x, self.y, drawn, 1),
                 Hit::Option(self.id, option),
             );
         }
@@ -246,6 +249,7 @@ fn inline_control(app: &App, row: &Setting, selected: bool, area: Rect) -> Line<
         id: row.id,
         x: area.x,
         y: area.y,
+        right: area.right(),
         spans: Vec::new(),
     };
     let room = area.width as usize;
@@ -323,14 +327,17 @@ fn inline_control(app: &App, row: &Setting, selected: bool, area: Rect) -> Line<
                 };
                 out.push(Span::styled(swatch, Style::new().fg(colour)), Some(index));
             }
-            out.push(
-                Span::styled(format!("  {name}"), Style::new().fg(Theme::TEXT)),
-                None,
-            );
+            // The colour name goes first when "# custom" would be clipped.
+            let custom = "# custom";
+            let swatches = colours.len() * 3;
+            let name = format!("  {name}");
+            if swatches + name.chars().count() + 2 + custom.len() <= room {
+                out.push(Span::styled(name, Style::new().fg(Theme::TEXT)), None);
+            }
             out.push(Span::raw("  "), None);
             // The option just past the swatches is "type a custom colour".
             out.push(
-                Span::styled("# custom", Style::new().fg(Theme::DIM)),
+                Span::styled(custom, Style::new().fg(Theme::DIM)),
                 Some(colours.len()),
             );
         }

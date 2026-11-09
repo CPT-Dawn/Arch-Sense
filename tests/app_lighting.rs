@@ -423,3 +423,40 @@ fn a_lighting_failure_shows_its_cause() {
     });
     assert!(app.screen().contains("Access denied"), "{}", app.screen());
 }
+
+/// The Colour row's own control, without the hint column.
+fn colour_control(app: &mut Harness, width: u16) -> (String, u16, u16) {
+    let hint = if width >= 110 { 44 } else { 0 };
+    let right = 21 + (width - 2 - 20 - hint);
+    let row = app.row("Colour").expect("Colour row");
+    let (_, y) = app.find_in_row("Colour", "").expect("row y");
+    let control: String = row.chars().skip(21).take((right - 21) as usize).collect();
+    (control, right, y)
+}
+
+#[test]
+fn custom_stays_visible_and_clickable_at_every_width() {
+    for width in [80, 109, 110, 112, 114, 116, 130] {
+        let fake = FakeMachine::builder()
+            .predator_sense()
+            .usb_hid_keyboard()
+            .build()
+            .expect("fake machine");
+        let mut app = Harness::start_sized(&fake, RecordingTransport::default(), width, 40);
+        app.wait_until("the Lighting section", |app| {
+            app.setting_labels().contains(&"Colour".to_string())
+        });
+        let (control, right, y) = colour_control(&mut app, width);
+        let at = control
+            .find("# custom")
+            .unwrap_or_else(|| panic!("width {width}: {control:?}"));
+        let x = 21 + control[..at].chars().count() as u16;
+
+        // Blank space past the drawn control is not a hit area.
+        app.click(right, y);
+        assert!(!app.screen().contains("Custom colour"), "width {width}");
+
+        app.click(x, y);
+        assert!(app.screen().contains("Custom colour"), "width {width}");
+    }
+}
