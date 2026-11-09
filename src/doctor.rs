@@ -326,9 +326,10 @@ fn laptop(machine: &MachineRoot) -> Check {
     let vendor = read(machine.dmi_sys_vendor()).map(|v| v.trim().to_owned());
     let model = read(machine.dmi_product_name()).map(|m| m.trim().to_owned());
     match (vendor, model) {
-        (Some(vendor), Some(model)) if vendor.eq_ignore_ascii_case("acer") => {
-            Check::ok(NAME, format!("{vendor} {model}"))
-        }
+        (Some(vendor), model) if vendor.eq_ignore_ascii_case("acer") => Check::ok(
+            NAME,
+            format!("{vendor} {}", model.as_deref().unwrap_or("(model unknown)")),
+        ),
         (Some(vendor), model) => Check::not_ok(
             NAME,
             Status::Error,

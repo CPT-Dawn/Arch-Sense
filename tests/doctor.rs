@@ -369,3 +369,14 @@ fn the_report_prints_one_line_per_check_with_remedies_underneath() {
         "{text}"
     );
 }
+
+#[test]
+fn an_acer_without_a_product_name_is_not_called_unsupported() {
+    let fake = FakeMachine::builder()
+        .sys_vendor("Acer")
+        .build()
+        .expect("fake machine");
+    let report = arch_sense::doctor::diagnose(&fake.machine(), Membership::Member);
+
+    assert_ne!(check(&report, "Laptop").status, Status::Error, "{report}");
+}
