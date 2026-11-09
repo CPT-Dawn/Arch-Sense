@@ -169,6 +169,26 @@ fn a_stale_login_is_told_to_log_in_again() {
 }
 
 #[test]
+fn a_member_whose_controls_were_never_granted_write_access_is_told_to_trigger_udev() {
+    use std::os::unix::fs::MetadataExt;
+    if std::fs::metadata("/proc/self").is_ok_and(|m| m.uid() == 0) {
+        return; // root can write anything
+    }
+    let fake = healthy()
+        .login(&["dawn"], &[966, 1000])
+        .read_only(|m| m.predator_sense_attr("fan_speed"))
+        .build()
+        .expect("fake machine");
+    let machine = fake.machine();
+    let report = doctor::diagnose(&machine, Membership::current(&machine));
+
+    let problem = only_problem(&report);
+    assert_eq!(problem.name, "Permissions");
+    assert_eq!(problem.status, Status::Error);
+    assert!(remedy(problem).contains("udevadm trigger"), "{report}");
+}
+
+#[test]
 fn an_unsupported_keyboard_is_a_warning_with_a_way_to_help() {
     let report = diagnose(
         healthy()

@@ -223,7 +223,7 @@ pub fn diagnose(machine: &MachineRoot, membership: Membership) -> Report {
         secure_boot(machine, &facts),
         acer_wmi(&facts),
         sense_interface(machine, &facts),
-        permissions(membership),
+        permissions(machine, membership),
         lighting(machine),
         boot_restore(machine),
         v1_leftovers(machine),
@@ -503,10 +503,21 @@ fn ph16_71_remedy() -> String {
     )
 }
 
-fn permissions(membership: Membership) -> Check {
+fn permissions(machine: &MachineRoot, membership: Membership) -> Check {
     const NAME: &str = "Permissions";
     match membership {
-        Membership::Member => Check::ok(NAME, "in the arch-sense group"),
+        Membership::Member => match ungranted_controls(machine) {
+            controls if controls.is_empty() => Check::ok(NAME, "in the arch-sense group"),
+            controls => Check::not_ok(
+                NAME,
+                Status::Error,
+                format!(
+                    "in the arch-sense group, but the udev rule hasn't made {} writable for it",
+                    controls.join(", ")
+                ),
+                "Reinstall the package (`paru -S arch-sense`) so its udev rule is in place, then re-apply it: `sudo udevadm trigger --action=change --subsystem-match=platform --sysname-match=acer-wmi`",
+            ),
+        },
         Membership::Root => Check::ok(NAME, "running as root"),
         Membership::StaleLogin => Check::not_ok(
             NAME,
@@ -529,6 +540,35 @@ fn permissions(membership: Membership) -> Check {
             ),
         ),
     }
+}
+
+/// The file names of the Sense Interface controls that exist but this process
+/// can't write, which is what a missing udev grant looks like.
+fn ungranted_controls(machine: &MachineRoot) -> Vec<String> {
+    let laptop = capabilities::detect(machine);
+    laptop
+        .capabilities()
+        .iter()
+        .filter_map(|capability| capability.path(machine, laptop.sense_interface))
+        .filter(|path| path.exists() && !writable(path))
+        .filter_map(|path| Some(path.file_name()?.to_string_lossy().into_owned()))
+        .collect()
+}
+
+/// Whether this process may write `path`, by access(2): it honours owner,
+/// group, mode and root, and writes nothing, which matters on real sysfs.
+fn writable(path: &Path) -> bool {
+    use std::ffi::{CString, c_char, c_int};
+    use std::os::unix::ffi::OsStrExt;
+    const W_OK: c_int = 2;
+    unsafe extern "C" {
+        fn access(path: *const c_char, mode: c_int) -> c_int;
+    }
+    let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `path` is a valid NUL-terminated string that outlives the call.
+    unsafe { access(path.as_ptr(), W_OK) == 0 }
 }
 
 fn lighting(machine: &MachineRoot) -> Check {
