@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Supported hardware
+    url: https://github.com/CPT-Dawn/Arch-Sense/blob/main/docs/hardware.md
+    about: Check whether your laptop and keyboard are supported before reporting
