@@ -1,0 +1,44 @@
+name: Bug report
+description: Something in Arch-Sense doesn't work as it should
+labels: [needs-triage]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `arch-sense --version`
+      placeholder: arch-sense 2.0.2
+    validations:
+      required: true
+  - type: input
+    id: laptop
+    attributes:
+      label: Laptop and kernel
+      description: Model, plus the output of `uname -r`
+      placeholder: Acer Predator PH16-71, 6.18.2-arch1-1
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Doctor output
+      description: Paste the full output of `arch-sense doctor`
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open arch-sense
+        2. Set Effect to Wave
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true

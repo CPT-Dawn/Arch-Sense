@@ -10,7 +10,7 @@
 pkgname=arch-sense
 pkgver=2.0.2
 pkgrel=1
-pkgdesc="Control center for Linuwu-Sense Acer laptops: thermal profiles, fans, battery and keyboard lighting"
+pkgdesc="Terminal control center for Acer Predator & Nitro laptops on Linux: thermals, fans, battery and keyboard RGB"
 arch=('x86_64')
 url="https://github.com/CPT-Dawn/Arch-Sense"
 license=('MIT')

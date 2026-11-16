@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest something Arch-Sense should do
+labels: [needs-triage]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: The solution you'd like
+    validations:
+      required: false
+  - type: input
+    id: laptop
+    attributes:
+      label: Your laptop
+      description: Model and keyboard (the Doctor's Lighting Backend line), if it matters
+    validations:
+      required: false

@@ -2,6 +2,13 @@
 name = "arch-sense"
 version = "2.0.2"
 edition = "2024"
+description = "Terminal control center for Acer Predator & Nitro laptops on Linux: thermals, fans, battery and keyboard RGB."
+license = "MIT"
+repository = "https://github.com/CPT-Dawn/Arch-Sense"
+homepage = "https://aur.archlinux.org/packages/arch-sense"
+readme = "README.md"
+keywords = ["acer", "tui", "fan-control", "rgb", "linux"]
+categories = ["command-line-utilities", "hardware-support"]
 
 [dependencies]
 anyhow = "1.0.104"
