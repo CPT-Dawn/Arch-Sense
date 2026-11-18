@@ -2,6 +2,12 @@
 
 What changed in each release. The full notes for every version are on [GitHub Releases](https://github.com/CPT-Dawn/Arch-Sense/releases).
 
+## 2.0.3 (2026-11-18)
+
+One Doctor fix; no config, CLI or file-location changes.
+
+- **Doctor:** with `linuwu-sense-dkms-git` installed but no `linux-headers`, pacman's DKMS hook skips the build silently and DKMS never registers the module. The Doctor used to call Linuwu-Sense "not installed" and suggest reinstalling it; it now finds the source in `/usr/src`, says the kernel headers are missing and points to `sudo pacman -S linux-headers` (or `sudo dkms autoinstall` if the headers are there) (#37).
+
 ## 2.0.2 (2026-11-09)
 
 Bug fixes; no config, CLI or file-location changes.
