@@ -111,6 +111,54 @@ fn nothing_installed_says_which_package_to_install() {
     assert!(remedy(dkms).contains("paru -S linuwu-sense-dkms-git"));
 }
 
+/// The real PH16-71 this came from: the package is installed, but without
+/// `linux-headers` pacman's DKMS hook skipped the build, so DKMS has no entry.
+/// Reinstalling the package changes nothing; installing the headers does.
+#[test]
+fn installed_source_without_headers_says_to_install_the_headers() {
+    let report = diagnose(
+        FakeMachine::builder().ph16_71_without_headers(),
+        Membership::Member,
+    );
+
+    let dkms = check(&report, "DKMS");
+    assert_eq!(dkms.status, Status::Error);
+    assert!(dkms.detail.contains("kernel headers missing"), "{report}");
+    assert!(
+        remedy(dkms).contains("sudo pacman -S linux-headers"),
+        "{report}"
+    );
+    assert!(!remedy(dkms).contains("paru -S"), "{report}");
+    assert!(
+        remedy(check(&report, "Kernel module")).contains("see the DKMS check"),
+        "{report}"
+    );
+}
+
+#[test]
+fn installed_source_with_headers_says_to_run_dkms_autoinstall() {
+    let report = diagnose(
+        FakeMachine::builder()
+            .ph16_71_without_headers()
+            .gcc_kernel(),
+        Membership::Member,
+    );
+
+    let dkms = check(&report, "DKMS");
+    assert_eq!(dkms.status, Status::Error);
+    assert!(
+        dkms.detail
+            .contains("/usr/src/linuwu-sense-r169.4483b6c isn't registered"),
+        "{report}"
+    );
+    assert!(remedy(dkms).contains("sudo dkms autoinstall"), "{report}");
+    assert!(!remedy(dkms).contains("linux-headers"), "{report}");
+    assert!(
+        remedy(check(&report, "Kernel module")).contains("see the DKMS check"),
+        "{report}"
+    );
+}
+
 #[test]
 fn acer_wmi_loaded_is_an_error() {
     let report = diagnose(healthy().acer_wmi_loaded(), Membership::Member);

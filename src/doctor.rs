@@ -249,7 +249,10 @@ enum Build {
     Manual,
     /// DKMS has the source but no build for this kernel.
     DkmsNotBuilt { log: String },
-    /// Nothing installed.
+    /// The source is in /usr/src, but DKMS never registered it: pacman's DKMS
+    /// hook skips the build, silently, when the kernel headers are missing.
+    SourceOnly { source: String },
+    /// No module and no source anywhere.
     Missing,
 }
 
@@ -306,8 +309,21 @@ fn build(machine: &MachineRoot, release: &str) -> Build {
     }
     match registered {
         Some(log) => Build::DkmsNotBuilt { log },
-        None => Build::Missing,
+        None => unregistered_source(machine).map_or(Build::Missing, |source| Build::SourceOnly {
+            source: shown(machine, &source),
+        }),
     }
+}
+
+/// Linuwu-Sense source installed for DKMS (`/usr/src/<name>-<version>/dkms.conf`).
+fn unregistered_source(machine: &MachineRoot) -> Option<PathBuf> {
+    subdirs(&machine.usr_src()).into_iter().find(|dir| {
+        let name = dir.file_name().unwrap_or_default().to_string_lossy();
+        DKMS_NAMES
+            .iter()
+            .any(|module| name.starts_with(&format!("{module}-")))
+            && dir.join("dkms.conf").is_file()
+    })
 }
 
 fn has_module(dir: &Path) -> bool {
@@ -356,7 +372,7 @@ fn kernel_module(facts: &Facts) -> Check {
         Build::Dkms | Build::Manual => {
             "Load it: `sudo modprobe linuwu_sense` (it loads at boot once installed)".to_owned()
         }
-        Build::DkmsNotBuilt { .. } | Build::Missing => {
+        Build::DkmsNotBuilt { .. } | Build::SourceOnly { .. } | Build::Missing => {
             "It isn't built for this kernel; see the DKMS check below".to_owned()
         }
     };
@@ -377,7 +393,7 @@ fn dkms(facts: &Facts) -> Check {
             "installed by hand, not managed by DKMS",
             "It won't be rebuilt when the kernel updates; `paru -S linuwu-sense-dkms-git` takes care of that",
         ),
-        Build::DkmsNotBuilt { .. } if !facts.headers => Check::not_ok(
+        Build::DkmsNotBuilt { .. } | Build::SourceOnly { .. } if !facts.headers => Check::not_ok(
             NAME,
             Status::Error,
             format!("not built for {release}: kernel headers missing"),
@@ -388,6 +404,12 @@ fn dkms(facts: &Facts) -> Check {
             Status::Error,
             format!("not built for {release}"),
             format!("Run `sudo dkms autoinstall`; if it fails, the build log is {log}"),
+        ),
+        Build::SourceOnly { source } => Check::not_ok(
+            NAME,
+            Status::Error,
+            format!("not built for {release}: the source in {source} isn't registered with DKMS"),
+            "Run `sudo dkms autoinstall` to register and build it",
         ),
         Build::Missing => Check::not_ok(
             NAME,
