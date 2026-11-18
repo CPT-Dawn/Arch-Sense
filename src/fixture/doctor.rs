@@ -27,6 +27,19 @@ impl FakeMachineBuilder {
             .without(MachineRoot::predator_sense_dir)
     }
 
+    /// A PH16-71 whose kernel headers were never installed: the package put
+    /// Linuwu-Sense's source in /usr/src, but pacman's DKMS hook skipped the
+    /// build, so DKMS has no entry for it at all.
+    pub fn ph16_71_without_headers(self) -> Self {
+        self.module_missing()
+            .acer("Predator PH16-71")
+            .gcc_kernel_without_headers()
+            .linuwu_sense_source()
+            .secure_boot(false)
+            .usb_hid_keyboard()
+            .boot_restore()
+    }
+
     /// An Acer laptop of model `model` according to DMI.
     pub fn acer(self, model: &str) -> Self {
         self.file(MachineRoot::dmi_sys_vendor, "Acer\n")
@@ -49,14 +62,31 @@ impl FakeMachineBuilder {
         )
     }
 
+    /// The running kernel, built with gcc, with no `linux-headers` installed
+    /// (no `/usr/lib/modules/<release>/build`).
+    pub fn gcc_kernel_without_headers(self) -> Self {
+        self.running_kernel("gcc (GCC) 15.2.1, GNU ld (GNU Binutils) 2.45")
+    }
+
     fn kernel(self, compiler: &str, config: &'static str) -> Self {
+        self.running_kernel(compiler).file(
+            |m| m.kernel_modules_dir(KERNEL_RELEASE).join("build/.config"),
+            config,
+        )
+    }
+
+    fn running_kernel(self, compiler: &str) -> Self {
         let banner = format!("Linux version {KERNEL_RELEASE} (builder@host) ({compiler}) #1 SMP\n");
         self.file(MachineRoot::kernel_release, format!("{KERNEL_RELEASE}\n"))
             .file(MachineRoot::proc_version, banner)
-            .file(
-                |m| m.kernel_modules_dir(KERNEL_RELEASE).join("build/.config"),
-                config,
-            )
+    }
+
+    /// `linuwu-sense-dkms-git`'s source in /usr/src, not (yet) registered with DKMS.
+    pub fn linuwu_sense_source(self) -> Self {
+        self.file(
+            |m| m.usr_src().join("linuwu-sense-r169.4483b6c/dkms.conf"),
+            "PACKAGE_NAME=\"linuwu-sense\"\nPACKAGE_VERSION=\"r169.4483b6c\"\nAUTOINSTALL=\"yes\"\n",
+        )
     }
 
     /// `linuwu-sense-dkms-git` installed, but DKMS hasn't built it for the

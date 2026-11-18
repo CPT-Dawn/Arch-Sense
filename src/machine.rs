@@ -34,6 +34,8 @@ const KERNEL_RELEASE: &str = "/proc/sys/kernel/osrelease";
 const PROC_VERSION: &str = "/proc/version";
 const KERNEL_MODULES_DIR: &str = "/usr/lib/modules";
 const DKMS_TREE: &str = "/var/lib/dkms";
+/// Where packages install kernel module source for DKMS to build.
+const USR_SRC: &str = "/usr/src";
 /// DKMS's own settings, where module signing keys are configured.
 const DKMS_FRAMEWORK_CONF: &str = "/etc/dkms/framework.conf";
 /// The certificate DKMS signs modules with unless told otherwise, inside [`DKMS_TREE`].
@@ -214,6 +216,12 @@ impl MachineRoot {
     /// DKMS's state tree: `<module>/<version>/<kernel>/<arch>/module/` per build.
     pub fn dkms_tree(&self) -> PathBuf {
         self.resolve(DKMS_TREE)
+    }
+
+    /// Installed module source, one `<module>-<version>/` (with `dkms.conf`) per
+    /// package, whether or not DKMS has registered it yet.
+    pub fn usr_src(&self) -> PathBuf {
+        self.resolve(USR_SRC)
     }
 
     /// DKMS's settings file, where `mok_signing_key`/`mok_certificate` go.
