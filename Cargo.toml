@@ -1,6 +1,6 @@
 [package]
 name = "arch-sense"
-version = "2.0.2"
+version = "2.0.3"
 edition = "2024"
 description = "Terminal control center for Acer Predator & Nitro laptops on Linux: thermals, fans, battery and keyboard RGB."
 license = "MIT"
